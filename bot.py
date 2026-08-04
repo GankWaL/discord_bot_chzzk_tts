@@ -254,10 +254,12 @@ async def list_voices(ctx: commands.Context):
         "typecast": "Typecast (크레딧 소모)",
         "google": "Google Neural2 (월 무료 한도 내)",
     }
-    lines = [
-        f"- **{name}** — {engine_label.get(voice['engine'], voice['engine'])}"
-        for name, voice in tts.available_voices().items()
-    ]
+    lines = []
+    for name, voice in tts.available_voices().items():
+        desc = f" ({voice['desc']})" if voice.get("desc") else ""
+        lines.append(
+            f"- **{name}**{desc} — {engine_label.get(voice['engine'], voice['engine'])}"
+        )
     await ctx.send("사용 가능한 목소리:\n" + "\n".join(lines))
 
 
@@ -310,7 +312,7 @@ async def credits(ctx: commands.Context):
             f"사용량: {used:,} / {total:,} ({percent:.1f}%) · 남은 크레딧: **{total - used:,}**"
         )
 
-    if tts.available_voices().get("구글A(여)"):
+    if any(v["engine"] == "google" for v in tts.available_voices().values()):
         usage = tts.google_usage()
         used = usage["chars"]
         percent = used / tts.GOOGLE_SAFE_LIMIT * 100 if tts.GOOGLE_SAFE_LIMIT else 0

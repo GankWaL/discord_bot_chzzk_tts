@@ -47,8 +47,8 @@ TYPECAST_VOICES = {
     "우니": {"engine": "typecast", "id": "tc_69c1f8e4f8842d80fbe7fa4f"},
     "옥지": {"engine": "typecast", "id": "tc_699d27b557c86e3f4249c051"},
     "몽실": {"engine": "typecast", "id": "tc_699d27e0e061695d6ed39bc6"},
-    "찬구": {"engine": "typecast", "id": "tc_5c547544fcfee90007fed455"},
-    "삐뚤어진 찬구": {"engine": "typecast", "id": "tc_6010088f885570093ad24d53"},
+    "찬구1": {"engine": "typecast", "id": "tc_5c547544fcfee90007fed455", "desc": "기본"},
+    "찬구2": {"engine": "typecast", "id": "tc_6010088f885570093ad24d53", "desc": "삐뚤어진 톤"},
 }
 
 DEFAULT_VOICE = "선히"
@@ -61,9 +61,9 @@ DEFAULT_SPEED = 1.0
 
 # Google Cloud TTS 한국어 Neural2 음성
 GOOGLE_VOICES = {
-    "구글A(여)": {"engine": "google", "id": "ko-KR-Neural2-A"},
-    "구글B(여)": {"engine": "google", "id": "ko-KR-Neural2-B"},
-    "구글C(남)": {"engine": "google", "id": "ko-KR-Neural2-C"},
+    "구글1": {"engine": "google", "id": "ko-KR-Neural2-A", "desc": "여성"},
+    "구글2": {"engine": "google", "id": "ko-KR-Neural2-B", "desc": "여성"},
+    "구글3": {"engine": "google", "id": "ko-KR-Neural2-C", "desc": "남성"},
 }
 
 
