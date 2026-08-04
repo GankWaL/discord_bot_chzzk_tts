@@ -221,7 +221,7 @@ async def stop(ctx: commands.Context):
 
 
 @bot.command(name="목소리", aliases=["voice"])
-async def set_voice(ctx: commands.Context, voice_name: str | None = None):
+async def set_voice(ctx: commands.Context, *, voice_name: str | None = None):
     if ctx.channel.name != BOT_CHANNEL_NAME:
         return
 
@@ -236,8 +236,8 @@ async def set_voice(ctx: commands.Context, voice_name: str | None = None):
     if ctx.author.id != session.owner_id:
         await ctx.send("봇을 시작한 유저만 목소리를 바꿀 수 있어요.")
         return
-    if voice_name not in tts.VOICES:
-        await ctx.send(f"없는 목소리예요. `!목소리목록` 으로 확인해주세요.")
+    if voice_name not in tts.available_voices():
+        await ctx.send("없는 목소리예요. `!목소리목록` 으로 확인해주세요.")
         return
 
     session.voice = voice_name
@@ -248,8 +248,37 @@ async def set_voice(ctx: commands.Context, voice_name: str | None = None):
 async def list_voices(ctx: commands.Context):
     if ctx.channel.name != BOT_CHANNEL_NAME:
         return
-    lines = [f"- **{name}** (`{voice_id}`)" for name, voice_id in tts.VOICES.items()]
+    engine_label = {"edge": "Edge TTS (무료)", "typecast": "Typecast (크레딧 소모)"}
+    lines = [
+        f"- **{name}** — {engine_label.get(voice['engine'], voice['engine'])}"
+        for name, voice in tts.available_voices().items()
+    ]
     await ctx.send("사용 가능한 목소리:\n" + "\n".join(lines))
+
+
+@bot.command(name="크레딧", aliases=["credits"])
+async def credits(ctx: commands.Context):
+    if ctx.channel.name != BOT_CHANNEL_NAME:
+        return
+    try:
+        info = await tts.typecast_credits()
+    except Exception:
+        await ctx.send("크레딧 정보를 가져오지 못했어요. 잠시 후 다시 시도해주세요.")
+        return
+    if info is None:
+        await ctx.send("Typecast API 키가 설정되어 있지 않아요.")
+        return
+
+    credit_info = info.get("credits", {})
+    total = credit_info.get("plan_credits", 0)
+    used = credit_info.get("used_credits", 0)
+    remaining = total - used
+    percent = (used / total * 100) if total else 0
+    await ctx.send(
+        f"**Typecast 크레딧** (플랜: {info.get('plan', '?')})\n"
+        f"사용량: {used:,} / {total:,} ({percent:.1f}%)\n"
+        f"남은 크레딧: **{remaining:,}**"
+    )
 
 
 @bot.command(name="채널생성")
@@ -273,6 +302,7 @@ async def help_command(ctx: commands.Context):
         "`!종료` — TTS 종료 (시작한 유저만 가능)\n"
         "`!목소리 <이름>` — 목소리 변경 (시작한 유저만 가능)\n"
         "`!목소리목록` — 사용 가능한 목소리 목록\n"
+        "`!크레딧` — Typecast 크레딧 사용량/잔여량 확인\n"
         "`!채널생성` — 봇 전용 채널이 없을 때 다시 생성\n\n"
         "TTS가 시작되면, 시작한 유저가 이 채널에 친 채팅만 음성으로 읽습니다."
     )
