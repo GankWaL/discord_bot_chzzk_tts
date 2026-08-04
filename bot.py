@@ -44,6 +44,7 @@ class Session:
         self.owner_id = owner_id
         self.voice_client = voice_client
         self.voice = tts.DEFAULT_VOICE
+        self.speed = tts.DEFAULT_SPEED
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.player_task: asyncio.Task | None = None
 
@@ -73,7 +74,7 @@ async def player_loop(session: Session) -> None:
     while True:
         text = await session.queue.get()
         try:
-            path = await tts.synthesize(text, session.voice)
+            path = await tts.synthesize(text, session.voice, session.speed)
         except Exception:
             continue
 
@@ -256,6 +257,34 @@ async def list_voices(ctx: commands.Context):
     await ctx.send("사용 가능한 목소리:\n" + "\n".join(lines))
 
 
+@bot.command(name="속도", aliases=["speed"])
+async def set_speed(ctx: commands.Context, speed: float | None = None):
+    if ctx.channel.name != BOT_CHANNEL_NAME:
+        return
+
+    session = sessions.get(ctx.guild.id)
+    if session is None:
+        await ctx.send("먼저 `!시작` 으로 TTS를 시작해주세요.")
+        return
+
+    if speed is None:
+        await ctx.send(
+            f"현재 재생 속도: **{session.speed:g}배속**\n"
+            f"사용법: `!속도 <{tts.MIN_SPEED:g}~{tts.MAX_SPEED:g}>` (예: `!속도 1.5`)"
+        )
+        return
+
+    if ctx.author.id != session.owner_id:
+        await ctx.send("봇을 시작한 유저만 속도를 바꿀 수 있어요.")
+        return
+    if not (tts.MIN_SPEED <= speed <= tts.MAX_SPEED):
+        await ctx.send(f"속도는 {tts.MIN_SPEED:g}~{tts.MAX_SPEED:g} 사이로 입력해주세요.")
+        return
+
+    session.speed = speed
+    await ctx.send(f"재생 속도를 **{speed:g}배속** 으로 변경했어요.")
+
+
 @bot.command(name="크레딧", aliases=["credits"])
 async def credits(ctx: commands.Context):
     if ctx.channel.name != BOT_CHANNEL_NAME:
@@ -302,6 +331,7 @@ async def help_command(ctx: commands.Context):
         "`!종료` — TTS 종료 (시작한 유저만 가능)\n"
         "`!목소리 <이름>` — 목소리 변경 (시작한 유저만 가능)\n"
         "`!목소리목록` — 사용 가능한 목소리 목록\n"
+        "`!속도 <0.5~2>` — 재생 속도 변경 (시작한 유저만 가능)\n"
         "`!크레딧` — Typecast 크레딧 사용량/잔여량 확인\n"
         "`!채널생성` — 봇 전용 채널이 없을 때 다시 생성\n\n"
         "TTS가 시작되면, 시작한 유저가 이 채널에 친 채팅만 음성으로 읽습니다."

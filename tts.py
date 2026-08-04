@@ -40,6 +40,11 @@ TYPECAST_VOICES = {
 
 DEFAULT_VOICE = "선히"
 
+# 재생 속도(배속) 범위 — Typecast audio_tempo 지원 범위에 맞춤
+MIN_SPEED = 0.5
+MAX_SPEED = 2.0
+DEFAULT_SPEED = 1.0
+
 
 def _typecast_key() -> str | None:
     return os.getenv("TYPECAST_API_KEY")
@@ -68,15 +73,16 @@ async def typecast_credits() -> dict | None:
             return await resp.json()
 
 
-async def synthesize(text: str, voice_name: str) -> str:
+async def synthesize(text: str, voice_name: str, speed: float = DEFAULT_SPEED) -> str:
     """텍스트를 음성으로 합성하고 생성된 오디오 파일 경로를 반환한다.
 
-    호출한 쪽에서 재생 후 파일을 삭제해야 한다.
+    speed 는 0.5~2.0 배속. 호출한 쪽에서 재생 후 파일을 삭제해야 한다.
     """
+    speed = max(MIN_SPEED, min(MAX_SPEED, speed))
     voice = available_voices().get(voice_name) or EDGE_VOICES[DEFAULT_VOICE]
     if voice["engine"] == "typecast":
-        return await _synthesize_typecast(text, voice["id"])
-    return await _synthesize_edge(text, voice["id"])
+        return await _synthesize_typecast(text, voice["id"], speed)
+    return await _synthesize_edge(text, voice["id"], speed)
 
 
 def _make_temp(suffix: str) -> str:
@@ -92,18 +98,24 @@ def _cleanup(path: str) -> None:
         pass
 
 
-async def _synthesize_edge(text: str, voice_id: str) -> str:
+async def _synthesize_edge(text: str, voice_id: str, speed: float) -> str:
+    rate = f"{round((speed - 1) * 100):+d}%"
     path = _make_temp(".mp3")
     try:
-        await edge_tts.Communicate(text, voice_id).save(path)
+        await edge_tts.Communicate(text, voice_id, rate=rate).save(path)
     except Exception:
         _cleanup(path)
         raise
     return path
 
 
-async def _synthesize_typecast(text: str, voice_id: str) -> str:
-    payload = {"text": text, "model": TYPECAST_MODEL, "voice_id": voice_id}
+async def _synthesize_typecast(text: str, voice_id: str, speed: float) -> str:
+    payload = {
+        "text": text,
+        "model": TYPECAST_MODEL,
+        "voice_id": voice_id,
+        "output": {"audio_tempo": speed},
+    }
     headers = {"X-API-KEY": _typecast_key()}
     path = _make_temp(".wav")
     try:
