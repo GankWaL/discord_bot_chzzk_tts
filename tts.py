@@ -2,10 +2,15 @@
 
 - Edge TTS: 무료, 기본 엔진.
 - Typecast: .env 에 TYPECAST_API_KEY 가 있으면 목소리 목록에 추가된다. (유료 크레딧 소모)
+- Google Cloud TTS (Neural2): .env 에 GOOGLE_TTS_API_KEY 가 있으면 추가된다.
+  월 무료 한도(100만 자)의 95%까지만 사용하고, 초과 시 Edge TTS로 자동 전환된다.
 
 교체/추가 시 available_voices() 와 synthesize() 인터페이스만 유지하면 된다.
 """
 
+import base64
+import json
+from datetime import datetime
 import os
 import tempfile
 
@@ -18,6 +23,14 @@ load_dotenv()
 TYPECAST_URL = "https://api.typecast.ai/v1/text-to-speech"
 TYPECAST_SUBSCRIPTION_URL = "https://api.typecast.ai/v1/users/me/subscription"
 TYPECAST_MODEL = "ssfm-v30"
+
+GOOGLE_TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
+# Neural2 월 무료 한도(100만 자) — 과금 방지를 위해 95%에서 차단
+GOOGLE_FREE_LIMIT = 1_000_000
+GOOGLE_SAFE_LIMIT = int(GOOGLE_FREE_LIMIT * 0.95)
+GOOGLE_USAGE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "google_tts_usage.json"
+)
 
 # 표시 이름 -> {engine, id}
 EDGE_VOICES = {
@@ -46,16 +59,55 @@ MAX_SPEED = 2.0
 DEFAULT_SPEED = 1.0
 
 
+# Google Cloud TTS 한국어 Neural2 음성
+GOOGLE_VOICES = {
+    "구글A(여)": {"engine": "google", "id": "ko-KR-Neural2-A"},
+    "구글B(여)": {"engine": "google", "id": "ko-KR-Neural2-B"},
+    "구글C(남)": {"engine": "google", "id": "ko-KR-Neural2-C"},
+}
+
+
 def _typecast_key() -> str | None:
     return os.getenv("TYPECAST_API_KEY")
 
 
+def _google_key() -> str | None:
+    return os.getenv("GOOGLE_TTS_API_KEY")
+
+
 def available_voices() -> dict[str, dict]:
-    """현재 사용 가능한 음성 목록. Typecast는 API 키가 있을 때만 포함된다."""
+    """현재 사용 가능한 음성 목록. Typecast/Google은 API 키가 있을 때만 포함된다."""
     voices = dict(EDGE_VOICES)
     if _typecast_key():
         voices.update(TYPECAST_VOICES)
+    if _google_key():
+        voices.update(GOOGLE_VOICES)
     return voices
+
+
+def google_usage() -> dict:
+    """이번 달 Google TTS 사용량({month, chars}). 달이 바뀌면 자동 리셋된다."""
+    month = datetime.now().strftime("%Y-%m")
+    try:
+        with open(GOOGLE_USAGE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if data.get("month") != month:
+        data = {"month": month, "chars": 0}
+    return data
+
+
+def _add_google_usage(chars: int) -> None:
+    data = google_usage()
+    data["chars"] += chars
+    with open(GOOGLE_USAGE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def google_quota_left() -> int:
+    """무료 한도 안전선(95%)까지 남은 글자 수."""
+    return max(0, GOOGLE_SAFE_LIMIT - google_usage()["chars"])
 
 
 async def typecast_credits() -> dict | None:
@@ -82,6 +134,15 @@ async def synthesize(text: str, voice_name: str, speed: float = DEFAULT_SPEED) -
     voice = available_voices().get(voice_name) or EDGE_VOICES[DEFAULT_VOICE]
     if voice["engine"] == "typecast":
         return await _synthesize_typecast(text, voice["id"], speed)
+    if voice["engine"] == "google":
+        # 무료 한도 안전선 초과 시 과금 방지를 위해 Edge TTS로 자동 전환
+        if len(text) > google_quota_left():
+            return await _synthesize_edge(
+                text, EDGE_VOICES[DEFAULT_VOICE]["id"], speed
+            )
+        path = await _synthesize_google(text, voice["id"], speed)
+        _add_google_usage(len(text))
+        return path
     return await _synthesize_edge(text, voice["id"], speed)
 
 
@@ -103,6 +164,30 @@ async def _synthesize_edge(text: str, voice_id: str, speed: float) -> str:
     path = _make_temp(".mp3")
     try:
         await edge_tts.Communicate(text, voice_id, rate=rate).save(path)
+    except Exception:
+        _cleanup(path)
+        raise
+    return path
+
+
+async def _synthesize_google(text: str, voice_id: str, speed: float) -> str:
+    payload = {
+        "input": {"text": text},
+        "voice": {"languageCode": "ko-KR", "name": voice_id},
+        "audioConfig": {"audioEncoding": "MP3", "speakingRate": speed},
+    }
+    path = _make_temp(".mp3")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{GOOGLE_TTS_URL}?key={_google_key()}",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(data["audioContent"]))
     except Exception:
         _cleanup(path)
         raise

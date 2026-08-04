@@ -249,7 +249,11 @@ async def set_voice(ctx: commands.Context, *, voice_name: str | None = None):
 async def list_voices(ctx: commands.Context):
     if ctx.channel.name != BOT_CHANNEL_NAME:
         return
-    engine_label = {"edge": "Edge TTS (무료)", "typecast": "Typecast (크레딧 소모)"}
+    engine_label = {
+        "edge": "Edge TTS (무료)",
+        "typecast": "Typecast (크레딧 소모)",
+        "google": "Google Neural2 (월 무료 한도 내)",
+    }
     lines = [
         f"- **{name}** — {engine_label.get(voice['engine'], voice['engine'])}"
         for name, voice in tts.available_voices().items()
@@ -289,25 +293,37 @@ async def set_speed(ctx: commands.Context, speed: float | None = None):
 async def credits(ctx: commands.Context):
     if ctx.channel.name != BOT_CHANNEL_NAME:
         return
+    lines = []
+
     try:
         info = await tts.typecast_credits()
     except Exception:
-        await ctx.send("크레딧 정보를 가져오지 못했어요. 잠시 후 다시 시도해주세요.")
-        return
-    if info is None:
-        await ctx.send("Typecast API 키가 설정되어 있지 않아요.")
-        return
+        info = None
+        lines.append("**Typecast** — 크레딧 정보를 가져오지 못했어요.")
+    if info is not None:
+        credit_info = info.get("credits", {})
+        total = credit_info.get("plan_credits", 0)
+        used = credit_info.get("used_credits", 0)
+        percent = (used / total * 100) if total else 0
+        lines.append(
+            f"**Typecast** (플랜: {info.get('plan', '?')})\n"
+            f"사용량: {used:,} / {total:,} ({percent:.1f}%) · 남은 크레딧: **{total - used:,}**"
+        )
 
-    credit_info = info.get("credits", {})
-    total = credit_info.get("plan_credits", 0)
-    used = credit_info.get("used_credits", 0)
-    remaining = total - used
-    percent = (used / total * 100) if total else 0
-    await ctx.send(
-        f"**Typecast 크레딧** (플랜: {info.get('plan', '?')})\n"
-        f"사용량: {used:,} / {total:,} ({percent:.1f}%)\n"
-        f"남은 크레딧: **{remaining:,}**"
-    )
+    if tts.available_voices().get("구글A(여)"):
+        usage = tts.google_usage()
+        used = usage["chars"]
+        percent = used / tts.GOOGLE_SAFE_LIMIT * 100 if tts.GOOGLE_SAFE_LIMIT else 0
+        lines.append(
+            f"**Google Neural2** ({usage['month']} 무료 한도)\n"
+            f"사용량: {used:,} / {tts.GOOGLE_SAFE_LIMIT:,}자 ({percent:.1f}%) · "
+            f"남은 글자 수: **{tts.google_quota_left():,}**\n"
+            f"-# 한도 도달 시 Edge TTS로 자동 전환됩니다."
+        )
+
+    if not lines:
+        lines.append("설정된 외부 TTS API 키가 없어요. (Edge TTS는 무제한 무료)")
+    await ctx.send("\n\n".join(lines))
 
 
 @bot.command(name="채널생성")

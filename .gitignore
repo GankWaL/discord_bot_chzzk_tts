@@ -5,3 +5,4 @@ venv/
 .venv/
 *.mp3
 bot.log
+google_tts_usage.json
