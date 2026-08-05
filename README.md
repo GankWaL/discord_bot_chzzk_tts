@@ -57,21 +57,25 @@
 winget install Gyan.FFmpeg
 ```
 
-### 3. 파이썬 환경 설정
+### 3. 설치 (GUI로 진행)
 
 ```powershell
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+git clone git@github.com:GankWaL/discord_bot_chzzk_tts.git
+cd discord_bot_chzzk_tts
+bat\setup.bat
 ```
 
-### 4. API 키 설정
+`bat\setup.bat` 을 실행하면 컨트롤 패널이 뜨고, 아래 순서로 클릭하면 설치가 끝납니다:
 
-```powershell
-copy .env.example .env
-```
+1. **설정 창** (자동으로 열림) — 디스코드 봇 토큰과 API 키 입력 → `.env` 자동 생성
+2. **[환경 설치]** — requirements.txt 라이브러리 일괄 설치
+3. **[exe 재빌드]** — 빌드 환경 자동 구성 후 exe 생성 → 이후부터는 `bat\start_gui.bat` 이 exe로 실행됨 (기본)
 
-`.env` 파일을 열어 입력합니다:
+패치는 **[업데이트 확인]** 버튼으로 처리됩니다 — 깃허브에 새 커밋이 있으면 목록을 보여주고, 확인하면 자동으로 `git pull` + exe 재빌드까지 진행합니다. 코드를 직접 수정한 경우에는 **[exe 재빌드]** 버튼만 누르면 됩니다.
+
+### .env 키 설명
+
+GUI 설정 창에서 입력하는 값들입니다 (`.env` 직접 편집도 가능):
 
 | 변수 | 필수 | 설명 |
 |---|---|---|
@@ -83,16 +87,20 @@ copy .env.example .env
 
 | 방법 | 파일 | 설명 |
 |---|---|---|
-| **GUI (권장)** | `start_gui.bat` | 컨트롤 패널에서 봇 실행/종료/재시작 + 로그 확인 |
-| 헤드리스 | `start_bot.bat` / `start_bot_hidden.vbs` | 봇만 실행 (vbs는 창 없이) |
-| exe | `dist\tts_bot_gui.exe` | 파이썬 설치 없이 실행 (아래 빌드 참고) |
-| 직접 실행 | `python src\bot.py` | 터미널에서 직접 |
+| **GUI (권장)** | `bat\start_gui.bat` | 컨트롤 패널 실행 (exe가 있으면 exe, 없으면 소스로) |
+| 헤드리스 | `bat\start_bot.bat` / `bat\start_bot_hidden.vbs` | 봇만 실행 (vbs는 창 없이) |
+| exe 직접 | `dist\tts_bot_gui.exe` | 컨트롤 패널 exe 직접 실행 |
+| 소스 직접 | `python src\bot.py` | 터미널에서 직접 |
 
-**PC 시작 시 자동 실행**: 시작 프로그램 폴더(`shell:startup`)에 `start_gui_hidden.vbs` 바로가기를 넣으면 로그온 시 GUI가 뜨면서 봇이 자동 시작됩니다.
+**PC 시작 시 자동 실행**: 시작 프로그램 폴더(`shell:startup`)에 `bat\start_gui_hidden.vbs` 바로가기를 넣으면 로그온 시 GUI가 뜨면서 봇이 자동 시작됩니다.
 
 ## 컨트롤 패널 (GUI)
 
 - **실행 / 종료 / 재시작** 버튼과 봇 상태 표시 (외부에서 실행된 봇도 감지·제어)
+- **설정** — 토큰/API 키 입력 서브 창 (.env 자동 생성·수정)
+- **환경 설치** — requirements.txt 라이브러리 일괄 설치
+- **exe 재빌드** — 빌드 환경 자동 구성 후 exe 재빌드
+- **업데이트 확인** — 깃허브 새 커밋 확인 → 승인 시 git pull + 자동 재빌드
 - 봇 로그(bot.log) 실시간 확인
 - 창을 닫으면 종료되지 않고 **트레이로 최소화** — 트레이 아이콘 우클릭 → 창 열기 / 봇 재시작 / 컨트롤 패널 종료(봇 유지) / 완전 종료(봇도 종료)
 
@@ -105,10 +113,12 @@ copy .env.example .env
 │   └── bot_gui.py      # 컨트롤 패널 GUI
 ├── icon\               # 아이콘·배너 이미지
 ├── dist\               # exe 빌드 결과물 (커밋 제외)
-├── start_bot.bat       # 봇 헤드리스 실행
-├── start_bot_hidden.vbs
-├── start_gui.bat       # 컨트롤 패널 실행
-├── start_gui_hidden.vbs  # 시작 프로그램용 (봇 자동 시작 포함)
+├── bat\
+│   ├── setup.bat             # 최초 설치용 (GUI 실행)
+│   ├── start_gui.bat         # 컨트롤 패널 실행
+│   ├── start_gui_hidden.vbs  # 시작 프로그램용 (봇 자동 시작 포함)
+│   ├── start_bot.bat         # 봇 헤드리스 실행
+│   └── start_bot_hidden.vbs
 └── requirements.txt
 ```
 

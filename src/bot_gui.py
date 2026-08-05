@@ -1,16 +1,19 @@
 """디스코드 TTS 봇 컨트롤 패널 (Windows GUI).
 
 - 봇 실행 / 종료 / 재시작 버튼, bot.log 실시간 확인
-- 창을 닫으면 종료되지 않고 작업 표시줄 트레이로 최소화된다.
-  트레이 아이콘 우클릭 → 창 열기 / 컨트롤 패널 종료
-- `--autostart` 옵션으로 실행하면 GUI가 뜨면서 봇도 자동 실행된다. (시작 프로그램용)
-- 시작 프로그램(vbs)으로 이미 실행된 봇도 감지해서 제어 가능
+- [설정] 서브 창에서 토큰·API 키 입력 → .env 자동 생성
+- [환경 설치] 버튼으로 requirements.txt 라이브러리 일괄 설치
+- [exe 재빌드] 버튼으로 패치 후 exe 재빌드 (빌드 환경 자동 구성)
+- 창을 닫으면 트레이로 최소화, 트레이 우클릭 메뉴로 제어
+- `--autostart` 옵션으로 실행하면 GUI가 뜨면서 봇도 자동 실행 (시작 프로그램용)
 
-실행: start_gui.bat 더블클릭 또는 `pythonw bot_gui.py`
+갓 클론한 상태(라이브러리 미설치)에서도 표준 라이브러리만으로 실행 가능:
+    python src\\bot_gui.py
 """
 
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -18,8 +21,14 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import pystray
-from PIL import Image, ImageDraw
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+
+    HAS_TRAY = True
+except ImportError:  # 최초 설치 전에는 트레이 없이 동작
+    pystray = None
+    HAS_TRAY = False
 
 # 프로젝트 루트: exe(PyInstaller)면 실행 파일 위치, 아니면 src/ 의 상위 폴더
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -28,17 +37,84 @@ BASE_DIR = (
     if FROZEN
     else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
-BOT_SCRIPT = os.path.join(BASE_DIR, "src", "bot.py")
+# exe는 dist\ 안에 있으므로 루트(레포)는 한 단계 위일 수 있다
+if FROZEN and os.path.basename(BASE_DIR).lower() == "dist":
+    REPO_DIR = os.path.dirname(BASE_DIR)
+else:
+    REPO_DIR = BASE_DIR
+
+BOT_SCRIPT = os.path.join(REPO_DIR, "src", "bot.py")
 BOT_EXE = os.path.join(BASE_DIR, "tts_bot.exe")
+GUI_EXE = os.path.join(REPO_DIR, "dist", "tts_bot_gui.exe")
 LOG_FILE = os.path.join(BASE_DIR, "bot.log")
-ICON_PNG = os.path.join(BASE_DIR, "icon", "icon.png")
-ICON_ICO = os.path.join(BASE_DIR, "icon", "icon.ico")
+ENV_FILE = os.path.join(BASE_DIR, ".env")
+REQUIREMENTS = os.path.join(REPO_DIR, "requirements.txt")
+BUILD_ENV_PY = os.path.join(REPO_DIR, "build_env", "Scripts", "python.exe")
+ICON_PNG = os.path.join(REPO_DIR, "icon", "icon.png")
+ICON_ICO = os.path.join(REPO_DIR, "icon", "icon.ico")
 NO_WINDOW = subprocess.CREATE_NO_WINDOW
 MAX_LOG_LINES = 2000
 
+ENV_FIELDS = [
+    ("DISCORD_TOKEN", "디스코드 봇 토큰 (필수)"),
+    ("TYPECAST_API_KEY", "Typecast API 키 (선택)"),
+    ("GOOGLE_TTS_API_KEY", "Google TTS API 키 (선택)"),
+]
 
-def find_bot_pids() -> list[int]:
-    """bot.py 를 실행 중인 python 프로세스 PID 목록 (GUI 밖에서 시작된 것 포함)."""
+BUILD_BOT_ARGS = [
+    "--noconfirm", "--onefile",
+    "--icon", os.path.join("icon", "icon.ico"),
+    "--name", "tts_bot",
+    "--collect-all", "discord",
+    "--collect-all", "nacl",
+    "--collect-all", "davey",
+    "--hidden-import", "_cffi_backend",
+    os.path.join("src", "bot.py"),
+]
+BUILD_GUI_ARGS = [
+    "--noconfirm", "--onefile", "--windowed",
+    "--icon", os.path.join("icon", "icon.ico"),
+    os.path.join("src", "bot_gui.py"),
+]
+
+
+def read_env() -> dict:
+    """ .env 를 dict 로 읽는다 (없으면 빈 dict)."""
+    values = {}
+    try:
+        with open(ENV_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                values[key.strip()] = val.strip()
+    except OSError:
+        pass
+    return values
+
+
+def write_env(new_values: dict) -> None:
+    """기존 .env 값을 유지하면서 전달된 키만 갱신해 저장한다.
+
+    exe 모드(dist\\.env)와 소스 모드(루트 .env)가 어긋나지 않도록
+    두 위치가 다르면 같은 내용으로 함께 저장한다.
+    """
+    values = read_env()
+    values.update(new_values)
+    lines = ["# 디스코드 TTS 봇 설정 (GUI 설정 창에서 관리됨)"]
+    for key, val in values.items():
+        lines.append(f"{key}={val}")
+    content = "\n".join(lines) + "\n"
+
+    targets = {ENV_FILE, os.path.join(REPO_DIR, ".env")}
+    for target in targets:
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(content)
+
+
+def find_bot_pids() -> list:
+    """bot.py / tts_bot.exe 를 실행 중인 프로세스 PID 목록."""
     cmd = (
         "Get-CimInstance Win32_Process -Filter "
         "\"Name='python.exe' or Name='pythonw.exe' or Name='tts_bot.exe'\" "
@@ -58,15 +134,78 @@ def find_bot_pids() -> list[int]:
     return [int(line) for line in out.split() if line.strip().isdigit()]
 
 
-def make_tray_image() -> Image.Image:
+def system_python() -> str | None:
+    """시스템 파이썬 경로 (소스 실행 시엔 자기 자신)."""
+    if not FROZEN:
+        return sys.executable
+    return shutil.which("python")
+
+
+def make_tray_image():
     if os.path.exists(ICON_PNG):
         return Image.open(ICON_PNG)
-    # 아이콘 파일이 없을 때의 대체 이미지
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, 60, 60], fill="#5865F2")  # 디스코드 색
-    draw.polygon([(24, 20), (24, 44), (44, 32)], fill="white")  # 재생 삼각형
+    draw.ellipse([4, 4, 60, 60], fill="#5865F2")
+    draw.polygon([(24, 20), (24, 44), (44, 32)], fill="white")
     return img
+
+
+class EnvDialog(tk.Toplevel):
+    """토큰/API 키를 입력받아 .env 를 생성·수정하는 서브 창."""
+
+    def __init__(self, parent: tk.Tk, on_saved=None):
+        super().__init__(parent)
+        self.on_saved = on_saved
+        self.title("설정 — 토큰 / API 키")
+        self.resizable(False, False)
+        self.grab_set()
+
+        current = read_env()
+        self.entries = {}
+
+        frame = ttk.Frame(self, padding=14)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="봇 실행에 필요한 키를 입력하세요. 저장하면 .env 파일이 생성/수정됩니다.",
+            font=("맑은 고딕", 9),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        for i, (key, label) in enumerate(ENV_FIELDS, start=1):
+            ttk.Label(frame, text=label).grid(row=i, column=0, sticky="w", pady=3)
+            entry = ttk.Entry(frame, width=52)
+            entry.insert(0, current.get(key, ""))
+            entry.grid(row=i, column=1, sticky="we", pady=3, padx=(8, 0))
+            self.entries[key] = entry
+
+        ttk.Label(
+            frame,
+            text="※ 선택 항목은 비워두면 해당 엔진 목소리가 비활성화됩니다.\n"
+            "※ 봇이 실행 중이면 재시작해야 적용됩니다.",
+            foreground="#888888",
+            font=("맑은 고딕", 8),
+        ).grid(row=len(ENV_FIELDS) + 1, column=0, columnspan=2, sticky="w", pady=(10, 8))
+
+        btns = ttk.Frame(frame)
+        btns.grid(row=len(ENV_FIELDS) + 2, column=0, columnspan=2, sticky="e")
+        ttk.Button(btns, text="저장", command=self._save).pack(side="right", padx=2)
+        ttk.Button(btns, text="취소", command=self.destroy).pack(side="right", padx=2)
+
+    def _save(self) -> None:
+        values = {key: entry.get().strip() for key, entry in self.entries.items()}
+        if not values["DISCORD_TOKEN"]:
+            messagebox.showwarning("설정", "디스코드 봇 토큰은 필수입니다.", parent=self)
+            return
+        try:
+            write_env(values)
+        except OSError as e:
+            messagebox.showerror("설정", f".env 저장 실패: {e}", parent=self)
+            return
+        if self.on_saved:
+            self.on_saved()
+        self.destroy()
 
 
 class BotGui:
@@ -74,9 +213,9 @@ class BotGui:
         self.root = root
         self.proc: subprocess.Popen | None = None
         self.log_handle = None
-        self.log_queue: queue.Queue[str] = queue.Queue()
+        self.log_queue: queue.Queue = queue.Queue()
         self.busy = False
-        self.tray: pystray.Icon | None = None
+        self.tray = None
 
         root.title("디스코드 TTS 봇 컨트롤 패널")
         if os.path.exists(ICON_ICO):
@@ -84,10 +223,11 @@ class BotGui:
                 root.iconbitmap(ICON_ICO)
             except tk.TclError:
                 pass
-        root.geometry("780x520")
-        root.minsize(560, 360)
+        root.geometry("800x560")
+        root.minsize(600, 400)
 
-        top = ttk.Frame(root, padding=8)
+        # ---- 1행: 상태 + 봇 제어 버튼 ----
+        top = ttk.Frame(root, padding=(8, 8, 8, 2))
         top.pack(fill="x")
 
         self.status_label = ttk.Label(top, text="상태 확인 중...", font=("맑은 고딕", 11, "bold"))
@@ -100,14 +240,30 @@ class BotGui:
         self.start_btn = ttk.Button(top, text="실행", command=lambda: self.run_action("start"))
         self.start_btn.pack(side="right", padx=2)
 
-        hint = ttk.Label(
-            top,
-            text="창을 닫으면 트레이로 최소화됩니다",
+        # ---- 2행: 도구 버튼 ----
+        tools = ttk.Frame(root, padding=(8, 2, 8, 6))
+        tools.pack(fill="x")
+
+        self.env_btn = ttk.Button(tools, text="설정 (토큰/API 키)", command=self.open_settings)
+        self.env_btn.pack(side="left", padx=2)
+        self.install_btn = ttk.Button(tools, text="환경 설치 (라이브러리)", command=self.install_deps)
+        self.install_btn.pack(side="left", padx=2)
+        self.build_btn = ttk.Button(tools, text="exe 재빌드", command=self.rebuild)
+        self.build_btn.pack(side="left", padx=2)
+
+        self.update_btn = ttk.Button(tools, text="업데이트 확인", command=self.check_update)
+        self.update_btn.pack(side="right", padx=2)
+
+        mode = "exe" if FROZEN else "소스"
+        tray_note = "" if HAS_TRAY else " · 트레이 비활성(환경 설치 필요)"
+        ttk.Label(
+            tools,
+            text=f"실행 모드: {mode}{tray_note}",
             foreground="#888888",
             font=("맑은 고딕", 8),
-        )
-        hint.pack(side="right", padx=8)
+        ).pack(side="right", padx=(0, 8))
 
+        # ---- 로그 뷰 ----
         log_frame = ttk.Frame(root, padding=(8, 0, 8, 8))
         log_frame.pack(fill="both", expand=True)
 
@@ -125,15 +281,255 @@ class BotGui:
         scroll_y.pack(side="right", fill="y")
         self.text.pack(side="left", fill="both", expand=True)
 
-        self._setup_tray()
+        if HAS_TRAY:
+            self._setup_tray()
         threading.Thread(target=self._tail_log_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
         self._poll_log_queue()
 
-        root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        if autostart:
+        # 토큰 미설정이면 설정 창을 먼저 띄운다 (최초 설치 흐름)
+        if not read_env().get("DISCORD_TOKEN"):
+            self.log("[안내] 디스코드 봇 토큰이 설정되어 있지 않습니다. 설정 창을 확인하세요.")
+            root.after(300, self.open_settings)
+        elif autostart:
             self.run_action("start")
+
+    # ---------- 공용 ----------
+
+    def log(self, message: str) -> None:
+        self.log_queue.put(message.rstrip("\n") + "\n")
+
+    def _set_all_buttons(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for b in (self.start_btn, self.stop_btn, self.restart_btn,
+                  self.install_btn, self.build_btn, self.update_btn):
+            b.configure(state=state)
+
+    def _ask_on_main(self, title: str, message: str) -> bool:
+        """작업 스레드에서 메인 스레드의 확인 창 결과를 받아온다."""
+        result = {"ok": False}
+        done = threading.Event()
+
+        def ask():
+            result["ok"] = messagebox.askyesno(title, message)
+            done.set()
+
+        self.root.after(0, ask)
+        done.wait()
+        return result["ok"]
+
+    def _stream_cmd(self, cmd: list, prefix: str, cwd: str = REPO_DIR) -> int:
+        """명령을 실행하고 출력을 로그 창으로 흘려보낸다. 반환값은 종료 코드."""
+        self.log(f"{prefix} $ {' '.join(os.path.basename(cmd[0]).split())} {' '.join(cmd[1:])}")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=NO_WINDOW,
+            )
+        except OSError as e:
+            self.log(f"{prefix} 실행 실패: {e}")
+            return -1
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                self.log(f"{prefix} {line}")
+        return proc.wait()
+
+    # ---------- 설정 (.env) ----------
+
+    def open_settings(self) -> None:
+        EnvDialog(self.root, on_saved=lambda: self.log("[설정] .env 저장 완료. 봇 실행 중이면 재시작해야 적용됩니다."))
+
+    # ---------- 환경 설치 ----------
+
+    def install_deps(self) -> None:
+        if self.busy:
+            return
+        py = system_python()
+        if not py:
+            messagebox.showerror("환경 설치", "시스템에 python이 없습니다. https://python.org 에서 설치 후 다시 시도하세요.")
+            return
+        self.busy = True
+        self._set_all_buttons(False)
+        threading.Thread(target=self._do_install, args=(py,), daemon=True).start()
+
+    def _do_install(self, py: str) -> None:
+        try:
+            self.log("[설치] 라이브러리 설치를 시작합니다...")
+            code = self._stream_cmd([py, "-m", "pip", "install", "-r", REQUIREMENTS], "[설치]")
+            if code == 0:
+                self.log("[설치] 완료! 트레이 기능은 GUI를 다시 실행하면 활성화됩니다.")
+            else:
+                self.log(f"[설치] 실패 (종료 코드 {code}). 로그를 확인하세요.")
+        finally:
+            self.busy = False
+            self.root.after(0, lambda: self._set_all_buttons(True))
+            self._refresh_status()
+
+    # ---------- exe 재빌드 ----------
+
+    def rebuild(self) -> None:
+        if self.busy:
+            return
+        if not messagebox.askyesno(
+            "exe 재빌드",
+            "봇을 종료하고 exe를 다시 빌드합니다. 몇 분 걸릴 수 있습니다.\n계속할까요?",
+        ):
+            return
+        self.busy = True
+        self._set_all_buttons(False)
+        threading.Thread(target=self._do_rebuild, daemon=True).start()
+
+    def _do_rebuild(self) -> None:
+        try:
+            self._stop_bot()
+            py = system_python()
+            if not py:
+                self.log("[빌드] 시스템 python을 찾을 수 없습니다.")
+                return
+
+            # 1) 빌드 전용 가상환경 준비
+            if not os.path.exists(BUILD_ENV_PY):
+                self.log("[빌드] 빌드 환경(build_env)을 처음 구성합니다...")
+                if self._stream_cmd([py, "-m", "venv", os.path.join(REPO_DIR, "build_env")], "[빌드]") != 0:
+                    self.log("[빌드] 가상환경 생성 실패")
+                    return
+                if self._stream_cmd(
+                    [BUILD_ENV_PY, "-m", "pip", "install", "-q", "-r", REQUIREMENTS, "pyinstaller"],
+                    "[빌드]",
+                ) != 0:
+                    self.log("[빌드] 빌드 의존성 설치 실패")
+                    return
+
+            # 2) 봇 exe 빌드
+            self.log("[빌드] tts_bot.exe 빌드 중...")
+            if self._stream_cmd([BUILD_ENV_PY, "-m", "PyInstaller", *BUILD_BOT_ARGS], "[빌드]") != 0:
+                self.log("[빌드] tts_bot.exe 빌드 실패")
+                return
+
+            # 3) GUI exe 빌드 — 자기 자신(exe 실행 중)이면 _new 로 빌드 후 다음 실행 때 교체
+            gui_name = "tts_bot_gui"
+            self_locked = False
+            if FROZEN:
+                try:
+                    self_locked = os.path.samefile(sys.executable, GUI_EXE)
+                except OSError:
+                    self_locked = False
+            if self_locked:
+                gui_name = "tts_bot_gui_new"
+            self.log(f"[빌드] {gui_name}.exe 빌드 중...")
+            if self._stream_cmd(
+                [BUILD_ENV_PY, "-m", "PyInstaller", "--name", gui_name, *BUILD_GUI_ARGS],
+                "[빌드]",
+            ) != 0:
+                self.log("[빌드] GUI exe 빌드 실패")
+                return
+
+            # 4) dist 에 설정/아이콘 복사
+            dist = os.path.join(REPO_DIR, "dist")
+            os.makedirs(os.path.join(dist, "icon"), exist_ok=True)
+            dist_env = os.path.join(dist, ".env")
+            if os.path.exists(ENV_FILE) and os.path.abspath(ENV_FILE) != os.path.abspath(dist_env):
+                shutil.copy2(ENV_FILE, dist_env)
+            for name in ("icon.png", "icon.ico"):
+                src_path = os.path.join(REPO_DIR, "icon", name)
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, os.path.join(dist, "icon", name))
+
+            self.log("[빌드] 완료!")
+            if self_locked:
+                self.log("[빌드] 새 GUI는 tts_bot_gui_new.exe 로 저장했습니다. "
+                         "start_gui.bat 로 다시 실행하면 자동으로 교체됩니다.")
+        finally:
+            self.busy = False
+            self.root.after(0, lambda: self._set_all_buttons(True))
+            self._refresh_status()
+
+    # ---------- 업데이트 확인 ----------
+
+    def check_update(self) -> None:
+        if self.busy:
+            return
+        if not shutil.which("git"):
+            messagebox.showerror("업데이트", "git 이 설치되어 있지 않아 업데이트를 확인할 수 없습니다.")
+            return
+        self.busy = True
+        self._set_all_buttons(False)
+        threading.Thread(target=self._do_check_update, daemon=True).start()
+
+    def _git(self, *args: str) -> tuple:
+        try:
+            proc = subprocess.run(
+                ["git", *args],
+                cwd=REPO_DIR,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                creationflags=NO_WINDOW,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return -1, str(e)
+        return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+    def _do_check_update(self) -> None:
+        rebuild_after = False
+        try:
+            self.log("[업데이트] 깃허브에서 새 커밋을 확인하는 중...")
+            code, out = self._git("fetch", "--quiet")
+            if code != 0:
+                self.log(f"[업데이트] 원격 확인 실패: {out}")
+                return
+            _, branch = self._git("rev-parse", "--abbrev-ref", "HEAD")
+            code, count = self._git("rev-list", f"HEAD..origin/{branch}", "--count")
+            if code != 0:
+                self.log(f"[업데이트] 비교 실패: {count}")
+                return
+            try:
+                n = int(count.split()[-1])
+            except (ValueError, IndexError):
+                self.log(f"[업데이트] 커밋 수 확인 실패: {count}")
+                return
+            if n == 0:
+                self.log("[업데이트] 이미 최신 상태입니다.")
+                self.root.after(0, lambda: messagebox.showinfo("업데이트", "이미 최신 상태입니다."))
+                return
+
+            _, commits = self._git("log", f"HEAD..origin/{branch}", "--oneline", "-n", "10")
+            self.log(f"[업데이트] 새 커밋 {n}개 발견:\n{commits}")
+            if not self._ask_on_main(
+                "업데이트",
+                f"새 업데이트 {n}개가 있습니다:\n\n{commits}\n\n"
+                "지금 업데이트하고 exe를 재빌드할까요? (봇이 재시작됩니다)",
+            ):
+                self.log("[업데이트] 사용자가 업데이트를 취소했습니다.")
+                return
+
+            code, out = self._git("pull", "--ff-only")
+            self.log(f"[업데이트] {out}")
+            if code != 0:
+                self.log("[업데이트] git pull 실패. 로컬 변경사항이 있는지 확인하세요.")
+                return
+            rebuild_after = True
+        finally:
+            if not rebuild_after:
+                self.busy = False
+                self.root.after(0, lambda: self._set_all_buttons(True))
+                self._refresh_status()
+
+        # 업데이트 성공 시 이어서 재빌드 (busy 상태 유지한 채 진행)
+        self.log("[업데이트] 업데이트 완료. exe 재빌드를 시작합니다...")
+        self._do_rebuild()
 
     # ---------- 트레이 ----------
 
@@ -145,13 +541,18 @@ class BotGui:
             pystray.MenuItem("컨트롤 패널 종료 (봇은 유지)", self._tray_quit),
             pystray.MenuItem("완전 종료 (봇도 종료)", self._tray_quit_all),
         )
-        self.tray = pystray.Icon(
-            "discord_tts_bot", make_tray_image(), "디스코드 TTS 봇", menu
-        )
+        self.tray = pystray.Icon("discord_tts_bot", make_tray_image(), "디스코드 TTS 봇", menu)
         self.tray.run_detached()
 
-    def _hide_to_tray(self) -> None:
-        self.root.withdraw()
+    def _on_close(self) -> None:
+        if HAS_TRAY:
+            self.root.withdraw()
+            return
+        # 트레이가 없으면 그냥 닫는다 (봇은 계속 실행됨을 안내)
+        if self.proc and self.proc.poll() is None:
+            if not messagebox.askyesno("종료", "봇은 백그라운드에서 계속 실행됩니다. 창을 닫을까요?"):
+                return
+        self.root.destroy()
 
     def _tray_show(self, icon=None, item=None) -> None:
         self.root.after(0, self._show_window)
@@ -184,11 +585,10 @@ class BotGui:
     # ---------- 봇 제어 ----------
 
     def run_action(self, action: str) -> None:
-        """버튼 액션을 작업 스레드에서 실행 (UI 멈춤 방지)."""
         if self.busy:
             return
         self.busy = True
-        self._set_buttons(False)
+        self._set_all_buttons(False)
         threading.Thread(target=self._do_action, args=(action,), daemon=True).start()
 
     def _do_action(self, action: str) -> None:
@@ -201,6 +601,7 @@ class BotGui:
             self.root.after(0, lambda: messagebox.showerror("오류", str(e)))
         finally:
             self.busy = False
+            self.root.after(0, lambda: self._set_all_buttons(True))
             self._refresh_status()
 
     def _start_bot(self) -> None:
@@ -208,17 +609,22 @@ class BotGui:
             return
         if find_bot_pids():
             return  # 이미 외부에서 실행 중
-        if FROZEN:
-            if not os.path.exists(BOT_EXE):
-                raise FileNotFoundError("tts_bot.exe 를 찾을 수 없어요. GUI와 같은 폴더에 있어야 합니다.")
+        if not read_env().get("DISCORD_TOKEN"):
+            self.root.after(0, self.open_settings)
+            raise RuntimeError("디스코드 봇 토큰이 설정되지 않았습니다. 설정 창에서 입력해주세요.")
+
+        if os.path.exists(BOT_EXE):
             bot_cmd = [BOT_EXE]
         else:
-            bot_cmd = [sys.executable, BOT_SCRIPT]
+            py = system_python()
+            if py is None or not os.path.exists(BOT_SCRIPT):
+                raise FileNotFoundError("tts_bot.exe 도 없고 소스 실행 환경도 없습니다. [exe 재빌드] 를 실행해주세요.")
+            bot_cmd = [py, BOT_SCRIPT]
         env = {**os.environ, "PYTHONUTF8": "1"}
         self.log_handle = open(LOG_FILE, "w", encoding="utf-8")
         self.proc = subprocess.Popen(
             bot_cmd,
-            cwd=BASE_DIR,
+            cwd=os.path.dirname(bot_cmd[0]) if bot_cmd[0] == BOT_EXE else REPO_DIR,
             stdout=self.log_handle,
             stderr=subprocess.STDOUT,
             env=env,
@@ -226,7 +632,6 @@ class BotGui:
         )
 
     def _stop_bot(self) -> None:
-        # GUI가 띄운 프로세스 종료
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -240,7 +645,6 @@ class BotGui:
             except OSError:
                 pass
             self.log_handle = None
-        # 시작 프로그램 등 외부에서 실행된 프로세스도 종료
         for pid in find_bot_pids():
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F"],
@@ -264,23 +668,14 @@ class BotGui:
         def update():
             self.status_label.configure(text=label, foreground=color)
             if not self.busy:
-                self._set_buttons(True, running)
+                self.start_btn.configure(state="disabled" if running else "normal")
+                self.stop_btn.configure(state="normal" if running else "disabled")
+                self.restart_btn.configure(state="normal" if running else "disabled")
 
         try:
             self.root.after(0, update)
         except RuntimeError:
-            pass  # 종료 중
-
-    def _set_buttons(self, enabled: bool, running: bool | None = None) -> None:
-        if not enabled:
-            for b in (self.start_btn, self.stop_btn, self.restart_btn):
-                b.configure(state="disabled")
-            return
-        if running is None:
-            running = True
-        self.start_btn.configure(state="disabled" if running else "normal")
-        self.stop_btn.configure(state="normal" if running else "disabled")
-        self.restart_btn.configure(state="normal" if running else "disabled")
+            pass
 
     # ---------- 로그 표시 ----------
 
@@ -291,7 +686,7 @@ class BotGui:
             try:
                 size = os.path.getsize(LOG_FILE)
                 if size < pos:
-                    pos = 0  # 봇 재시작으로 로그가 새로 쓰였음
+                    pos = 0
                     self.log_queue.put("\n----- 로그 파일이 새로 시작되었습니다 -----\n")
                 if size > pos or first:
                     with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
