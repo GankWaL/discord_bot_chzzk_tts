@@ -7,7 +7,9 @@
 """
 
 import asyncio
+import json
 import os
+import random
 import shutil
 import sys
 
@@ -41,6 +43,30 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 # GUI가 이 파일을 만들면 봇이 정상 로그아웃 후 스스로 종료한다
 SHUTDOWN_FLAG = os.path.join(BASE_DIR, "shutdown.flag")
 
+# 유저별 마지막 목소리/속도/감정 설정 저장 파일
+SETTINGS_FILE = os.path.join(BASE_DIR, "user_settings.json")
+
+
+def load_all_settings() -> dict:
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_user_setting(user_id: int, **kwargs) -> None:
+    """유저의 설정 일부를 갱신해 저장한다. (voice / speed / emotion)"""
+    data = load_all_settings()
+    entry = data.get(str(user_id), {})
+    entry.update(kwargs)
+    data[str(user_id)] = entry
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"[설정 저장 실패] {e}", flush=True)
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # PATH에 ffmpeg가 없어도 winget 설치 경로에서 찾아 쓴다
@@ -66,9 +92,19 @@ class Session:
     def __init__(self, owner_id: int, voice_client: discord.VoiceClient):
         self.owner_id = owner_id
         self.voice_client = voice_client
-        self.voice = tts.DEFAULT_VOICE
-        self.speed = tts.DEFAULT_SPEED
-        self.emotion = tts.DEFAULT_EMOTION
+
+        # 마지막으로 사용하던 설정 복원 (없거나 유효하지 않으면 기본값)
+        saved = load_all_settings().get(str(owner_id), {})
+        voices = tts.available_voices()
+        self.voice = saved.get("voice") if saved.get("voice") in voices else tts.DEFAULT_VOICE
+        speed = saved.get("speed", tts.DEFAULT_SPEED)
+        self.speed = (
+            float(speed)
+            if isinstance(speed, (int, float)) and tts.MIN_SPEED <= speed <= tts.MAX_SPEED
+            else tts.DEFAULT_SPEED
+        )
+        emotion = saved.get("emotion")
+        self.emotion = emotion if emotion in tts.TYPECAST_EMOTIONS else tts.DEFAULT_EMOTION
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.player_task: asyncio.Task | None = None
 
@@ -273,6 +309,14 @@ async def start(ctx: commands.Context, *, bot_name: str | None = None):
     if ctx.channel.name != BOT_CHANNEL_NAME:
         return
 
+    # 마지막 인자가 "랜덤"이면 랜덤 목소리로 시작 (예: !시작 랜덤, !시작 TTS봇 랜덤)
+    random_voice = False
+    if bot_name:
+        parts = bot_name.split()
+        if parts and parts[-1] == "랜덤":
+            random_voice = True
+            bot_name = " ".join(parts[:-1]) or None
+
     # 봇 이름이 지정되면 내 이름과 일치할 때만 반응 (여러 봇 동시 운영 대비)
     if bot_name is not None and not is_my_name(ctx.guild, bot_name):
         return
@@ -298,12 +342,18 @@ async def start(ctx: commands.Context, *, bot_name: str | None = None):
         return
 
     session = Session(ctx.author.id, voice_client)
+    if random_voice:
+        session.voice = random.choice(list(tts.available_voices()))
+        save_user_setting(ctx.author.id, voice=session.voice)
     session.player_task = asyncio.create_task(player_loop(session))
     sessions[ctx.guild.id] = session
 
+    voice_label = f"현재 목소리: {session.voice}"
+    if random_voice:
+        voice_label = f"랜덤 목소리 선택: **{session.voice}**"
     await ctx.send(
         f"**{ctx.guild.me.display_name}** 봇이 **{ctx.author.display_name}** 님의 TTS를 시작했어요! "
-        f"이 채널에 친 채팅을 읽어드립니다. (현재 목소리: {session.voice})\n"
+        f"이 채널에 친 채팅을 읽어드립니다. ({voice_label})\n"
         "종료하려면 `!종료` 를 입력하세요."
     )
 
@@ -341,12 +391,17 @@ async def set_voice(ctx: commands.Context, *, voice_name: str | None = None):
     if ctx.author.id != session.owner_id:
         await ctx.send("봇을 시작한 유저만 목소리를 바꿀 수 있어요.")
         return
-    if voice_name not in tts.available_voices():
+    picked_random = voice_name == "랜덤"
+    if picked_random:
+        voice_name = random.choice(list(tts.available_voices()))
+    elif voice_name not in tts.available_voices():
         await ctx.send("없는 목소리예요. `!목소리목록` 으로 확인해주세요.")
         return
 
     session.voice = voice_name
-    await ctx.send(f"목소리를 **{voice_name}** (으)로 변경했어요.")
+    save_user_setting(ctx.author.id, voice=voice_name)
+    prefix = "랜덤으로 " if picked_random else ""
+    await ctx.send(f"{prefix}목소리를 **{voice_name}** (으)로 변경했어요.")
 
 
 @bot.command(name="목소리목록", aliases=["voices"])
@@ -392,6 +447,7 @@ async def set_speed(ctx: commands.Context, speed: float | None = None):
         return
 
     session.speed = speed
+    save_user_setting(ctx.author.id, speed=speed)
     await ctx.send(f"재생 속도를 **{speed:g}배속** 으로 변경했어요.")
 
 
@@ -422,6 +478,7 @@ async def set_emotion(ctx: commands.Context, emotion: str | None = None):
         return
 
     session.emotion = emotion
+    save_user_setting(ctx.author.id, emotion=emotion)
     voice_info = tts.available_voices().get(session.voice, {})
     note = ""
     if voice_info.get("engine") != "typecast":
@@ -483,10 +540,11 @@ async def create_channel(ctx: commands.Context):
 async def help_command(ctx: commands.Context):
     await ctx.send(
         "**TTS 봇 명령어** (봇 전용 채널에서 사용)\n"
-        "`!시작 [봇이름]` — 내가 접속한 통화 채널에 봇을 입장시키고 TTS 시작\n"
-        "  (봇이 여러 개일 때 이름을 지정하면 그 봇만 반응, 예: `!시작 TTS봇`)\n"
+        "`!시작 [봇이름] [랜덤]` — 내가 접속한 통화 채널에 봇을 입장시키고 TTS 시작\n"
+        "  (이름 지정 시 그 봇만 반응, `랜덤` 을 붙이면 랜덤 목소리로 시작)\n"
+        "  마지막으로 쓰던 목소리·속도·감정은 자동 저장되어 다음 시작 때 복원됩니다\n"
         "`!종료` — TTS 종료 (시작한 유저만 가능)\n"
-        "`!목소리 <이름>` — 목소리 변경 (시작한 유저만 가능)\n"
+        "`!목소리 <이름|랜덤>` — 목소리 변경 (시작한 유저만 가능)\n"
         "`!목소리목록` — 사용 가능한 목소리 목록\n"
         "`!속도 <0.5~2>` — 재생 속도 변경 (시작한 유저만 가능)\n"
         "`!감정 <이름>` — Typecast 목소리 감정 변경 (시작한 유저만 가능)\n"
