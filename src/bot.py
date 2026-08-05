@@ -9,6 +9,7 @@
 import asyncio
 import os
 import shutil
+import sys
 
 import discord
 from discord.ext import commands
@@ -16,7 +17,14 @@ from dotenv import load_dotenv
 
 import tts
 
-load_dotenv()
+# 프로젝트 루트: exe(PyInstaller)면 실행 파일 위치, 아니면 src/ 의 상위 폴더
+BASE_DIR = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
@@ -45,6 +53,7 @@ class Session:
         self.voice_client = voice_client
         self.voice = tts.DEFAULT_VOICE
         self.speed = tts.DEFAULT_SPEED
+        self.emotion = tts.DEFAULT_EMOTION
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.player_task: asyncio.Task | None = None
 
@@ -74,7 +83,9 @@ async def player_loop(session: Session) -> None:
     while True:
         text = await session.queue.get()
         try:
-            path = await tts.synthesize(text, session.voice, session.speed)
+            path = await tts.synthesize(
+                text, session.voice, session.speed, session.emotion
+            )
         except Exception:
             continue
 
@@ -291,6 +302,40 @@ async def set_speed(ctx: commands.Context, speed: float | None = None):
     await ctx.send(f"재생 속도를 **{speed:g}배속** 으로 변경했어요.")
 
 
+@bot.command(name="감정", aliases=["emotion"])
+async def set_emotion(ctx: commands.Context, emotion: str | None = None):
+    if ctx.channel.name != BOT_CHANNEL_NAME:
+        return
+
+    session = sessions.get(ctx.guild.id)
+    if session is None:
+        await ctx.send("먼저 `!시작` 으로 TTS를 시작해주세요.")
+        return
+
+    emotion_list = " / ".join(tts.TYPECAST_EMOTIONS)
+    if emotion is None:
+        await ctx.send(
+            f"현재 감정: **{session.emotion}**\n"
+            f"사용법: `!감정 <이름>` — {emotion_list}\n"
+            "-# 감정은 Typecast 목소리에만 적용됩니다."
+        )
+        return
+
+    if ctx.author.id != session.owner_id:
+        await ctx.send("봇을 시작한 유저만 감정을 바꿀 수 있어요.")
+        return
+    if emotion not in tts.TYPECAST_EMOTIONS:
+        await ctx.send(f"없는 감정이에요. 사용 가능: {emotion_list}")
+        return
+
+    session.emotion = emotion
+    voice_info = tts.available_voices().get(session.voice, {})
+    note = ""
+    if voice_info.get("engine") != "typecast":
+        note = f"\n-# 현재 목소리(**{session.voice}**)는 Typecast가 아니라서 감정이 적용되지 않아요."
+    await ctx.send(f"감정을 **{emotion}** (으)로 변경했어요.{note}")
+
+
 @bot.command(name="크레딧", aliases=["credits"])
 async def credits(ctx: commands.Context):
     if ctx.channel.name != BOT_CHANNEL_NAME:
@@ -350,6 +395,7 @@ async def help_command(ctx: commands.Context):
         "`!목소리 <이름>` — 목소리 변경 (시작한 유저만 가능)\n"
         "`!목소리목록` — 사용 가능한 목소리 목록\n"
         "`!속도 <0.5~2>` — 재생 속도 변경 (시작한 유저만 가능)\n"
+        "`!감정 <이름>` — Typecast 목소리 감정 변경 (시작한 유저만 가능)\n"
         "`!크레딧` — Typecast 크레딧 사용량/잔여량 확인\n"
         "`!채널생성` — 봇 전용 채널이 없을 때 다시 생성\n\n"
         "TTS가 시작되면, 시작한 유저가 이 채널에 친 채팅만 음성으로 읽습니다."

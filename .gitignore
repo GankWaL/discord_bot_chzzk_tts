@@ -6,3 +6,7 @@ venv/
 *.mp3
 bot.log
 google_tts_usage.json
+build/
+build_env/
+dist/
+*.spec

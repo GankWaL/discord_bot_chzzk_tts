@@ -1,6 +1,6 @@
-' 봇을 콘솔 창 없이 백그라운드로 실행한다 (스크립트 위치 기준 상대경로)
+' 컨트롤 패널(GUI)을 띄우면서 봇도 자동 실행한다 (스크립트 위치 기준 상대경로)
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 baseDir = fso.GetParentFolderName(WScript.ScriptFullName)
 shell.CurrentDirectory = baseDir
-shell.Run """" & baseDir & "\start_bot.bat""", 0, False
+shell.Run "pythonw """ & baseDir & "\src\bot_gui.py"" --autostart", 1, False

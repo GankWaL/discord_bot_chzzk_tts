@@ -70,7 +70,32 @@ python bot.py
 | `!채널생성` | 전용 채널 재생성 |
 | `!도움말` | 명령어 안내 |
 
+## 컨트롤 패널 (GUI)
+
+`start_gui.bat` 을 더블클릭하면 봇 컨트롤 패널이 열립니다.
+
+- **실행 / 종료 / 재시작** 버튼으로 봇 제어 (시작 프로그램으로 실행된 봇도 감지·제어)
+- 봇 로그(bot.log) 실시간 확인
+- 창을 닫으면 종료되지 않고 **트레이로 최소화** — 트레이 아이콘 우클릭 → 창 열기 / 봇 재시작 / 컨트롤 패널 종료
+- PC 시작 시 `start_gui_hidden.vbs` (시작 프로그램 등록됨)가 GUI를 띄우면서 봇도 자동 실행
+
 ## 구조
 
-- [bot.py](bot.py) — 봇 본체 (명령어, 세션 관리, 재생 큐)
-- [tts.py](tts.py) — TTS 엔진 모듈. Edge TTS 사용 중이며, 추후 CLOVA Voice 등으로 교체 시 이 파일만 수정하면 됩니다.
+- [src/bot.py](src/bot.py) — 봇 본체 (명령어, 세션 관리, 재생 큐)
+- [src/tts.py](src/tts.py) — TTS 엔진 모듈 (Edge TTS / Typecast / Google Neural2)
+- [src/bot_gui.py](src/bot_gui.py) — 컨트롤 패널 GUI
+- [icon/](icon/) — 봇 아이콘 (png: 디스코드 아바타용, ico: 창/트레이용)
+- `start_bot.bat` / `start_bot_hidden.vbs` — 봇만 헤드리스 실행
+- `start_gui.bat` / `start_gui_hidden.vbs` — 컨트롤 패널 실행 (vbs는 봇 자동 시작 포함, 시작 프로그램용)
+- `dist\` — PyInstaller 빌드 결과물 (`tts_bot.exe`, `tts_bot_gui.exe`, 커밋 제외)
+
+## 빌드 (exe)
+
+```powershell
+python -m venv build_env
+build_env\Scripts\python -m pip install -r requirements.txt pyinstaller
+build_env\Scripts\python -m PyInstaller --noconfirm --onefile --icon icon\icon.ico --name tts_bot src\bot.py
+build_env\Scripts\python -m PyInstaller --noconfirm --onefile --windowed --icon icon\icon.ico --name tts_bot_gui src\bot_gui.py
+```
+
+빌드 후 `dist\` 에 `.env` 와 `icon\` 폴더를 복사하면 폴더째 배포할 수 있습니다. (실행 PC에 FFmpeg 필요)
