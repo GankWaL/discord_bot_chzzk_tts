@@ -73,6 +73,12 @@ class Session:
 sessions: dict[int, Session] = {}
 
 
+def is_my_name(guild: discord.Guild, name: str) -> bool:
+    """지정한 이름이 이 봇(서버 별명 또는 계정명)을 가리키는지 확인한다."""
+    candidates = {guild.me.display_name.lower(), bot.user.name.lower()}
+    return name.strip().lower() in candidates
+
+
 def find_bot_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return discord.utils.get(guild.text_channels, name=BOT_CHANNEL_NAME)
 
@@ -127,6 +133,35 @@ async def end_session(guild_id: int) -> None:
         session.player_task.cancel()
     if session.voice_client.is_connected():
         await session.voice_client.disconnect()
+
+
+@bot.check
+async def only_owner_when_bound(ctx: commands.Context):
+    """세션이 잡힌 동안에는 봇 주인의 명령어에만 반응한다.
+
+    여러 봇이 같은 채널에 있을 때, 다른 유저의 명령어는 무시해서
+    그 유저와 연결된(또는 유휴 상태인) 봇만 응답하게 한다.
+    !시작 은 예외 — 이름 지정 시 사용 중 안내를 위해 명령어 안에서 처리한다.
+    """
+    if ctx.guild is None:
+        return False
+    session = sessions.get(ctx.guild.id)
+    if (
+        session is not None
+        and ctx.author.id != session.owner_id
+        and ctx.command is not None
+        and ctx.command.name != "시작"
+    ):
+        return False
+    return True
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    # 체크 실패(다른 봇 몫의 명령어)와 없는 명령어는 조용히 무시
+    if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
+        return
+    print(f"[명령어 오류] {ctx.command}: {error}", flush=True)
 
 
 @bot.event
@@ -204,14 +239,22 @@ async def on_voice_state_update(member, before, after):
 
 
 @bot.command(name="시작", aliases=["start"])
-async def start(ctx: commands.Context):
+async def start(ctx: commands.Context, *, bot_name: str | None = None):
     if ctx.channel.name != BOT_CHANNEL_NAME:
         return
 
+    # 봇 이름이 지정되면 내 이름과 일치할 때만 반응 (여러 봇 동시 운영 대비)
+    if bot_name is not None and not is_my_name(ctx.guild, bot_name):
+        return
+
     if ctx.guild.id in sessions:
-        owner = ctx.guild.get_member(sessions[ctx.guild.id].owner_id)
-        owner_name = owner.display_name if owner else "다른 유저"
-        await ctx.send(f"이미 **{owner_name}** 님이 봇을 사용 중이에요. 종료 후 다시 시도해주세요.")
+        # 이름으로 콕 집어 불렀을 때만 사용 중 안내 (그 외에는 유휴 봇에게 양보)
+        if bot_name is not None:
+            owner = ctx.guild.get_member(sessions[ctx.guild.id].owner_id)
+            owner_name = owner.display_name if owner else "다른 유저"
+            await ctx.send(
+                f"**{ctx.guild.me.display_name}** 은(는) 이미 **{owner_name}** 님이 사용 중이에요."
+            )
         return
 
     if ctx.author.voice is None or ctx.author.voice.channel is None:
@@ -229,7 +272,7 @@ async def start(ctx: commands.Context):
     sessions[ctx.guild.id] = session
 
     await ctx.send(
-        f"**{ctx.author.display_name}** 님의 TTS를 시작했어요! "
+        f"**{ctx.guild.me.display_name}** 봇이 **{ctx.author.display_name}** 님의 TTS를 시작했어요! "
         f"이 채널에 친 채팅을 읽어드립니다. (현재 목소리: {session.voice})\n"
         "종료하려면 `!종료` 를 입력하세요."
     )
@@ -410,7 +453,8 @@ async def create_channel(ctx: commands.Context):
 async def help_command(ctx: commands.Context):
     await ctx.send(
         "**TTS 봇 명령어** (봇 전용 채널에서 사용)\n"
-        "`!시작` — 내가 접속한 통화 채널에 봇을 입장시키고 TTS 시작\n"
+        "`!시작 [봇이름]` — 내가 접속한 통화 채널에 봇을 입장시키고 TTS 시작\n"
+        "  (봇이 여러 개일 때 이름을 지정하면 그 봇만 반응, 예: `!시작 TTS봇`)\n"
         "`!종료` — TTS 종료 (시작한 유저만 가능)\n"
         "`!목소리 <이름>` — 목소리 변경 (시작한 유저만 가능)\n"
         "`!목소리목록` — 사용 가능한 목소리 목록\n"
