@@ -21,6 +21,14 @@ import nacl.utils  # noqa: F401
 
 import tts
 
+# 로그 한글 깨짐 방지 — exe/리다이렉트 환경에서 cp949로 출력되는 문제
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None:
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
 # 프로젝트 루트: exe(PyInstaller)면 실행 파일 위치, 아니면 src/ 의 상위 폴더
 BASE_DIR = (
     os.path.dirname(sys.executable)
@@ -90,7 +98,8 @@ async def player_loop(session: Session) -> None:
             path = await tts.synthesize(
                 text, session.voice, session.speed, session.emotion
             )
-        except Exception:
+        except Exception as e:
+            print(f"[TTS 합성 오류] {type(e).__name__}: {e}", flush=True)
             continue
 
         finished = asyncio.Event()
@@ -101,8 +110,8 @@ async def player_loop(session: Session) -> None:
                 after=lambda _err: loop.call_soon_threadsafe(finished.set),
             )
             await finished.wait()
-        except discord.ClientException:
-            pass
+        except Exception as e:
+            print(f"[재생 오류] {type(e).__name__}: {e}", flush=True)
         finally:
             try:
                 os.remove(path)
@@ -124,6 +133,12 @@ async def end_session(guild_id: int) -> None:
 async def on_ready():
     print(f"봇 로그인 완료: {bot.user}")
     print(f"음성 지원(PyNaCl): {discord.voice_client.has_nacl}", flush=True)
+    try:
+        if not discord.opus.is_loaded():
+            discord.opus._load_default()
+    except Exception as e:
+        print(f"Opus 로드 실패: {e}", flush=True)
+    print(f"음성 인코더(Opus): {discord.opus.is_loaded()}", flush=True)
 
 
 @bot.event
