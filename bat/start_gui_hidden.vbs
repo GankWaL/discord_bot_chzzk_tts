@@ -7,8 +7,14 @@ shell.CurrentDirectory = repoDir
 
 newExe = repoDir & "\dist\tts_bot_gui_new.exe"
 guiExe = repoDir & "\dist\tts_bot_gui.exe"
+oldExe = repoDir & "\dist\tts_bot_gui_old.exe"
 
-' swap in rebuilt GUI exe if present
+' clean up leftovers from in-place GUI rebuild
+On Error Resume Next
+If fso.FileExists(oldExe) Then fso.DeleteFile oldExe, True
+On Error GoTo 0
+
+' swap in rebuilt GUI exe if present (legacy fallback path)
 If fso.FileExists(newExe) Then
     If fso.FileExists(guiExe) Then fso.DeleteFile guiExe, True
     fso.MoveFile newExe, guiExe

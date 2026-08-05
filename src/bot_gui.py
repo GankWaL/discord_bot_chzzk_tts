@@ -285,6 +285,7 @@ class BotGui:
             self._setup_tray()
         threading.Thread(target=self._tail_log_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
+        threading.Thread(target=self._cleanup_old_exe, daemon=True).start()
         self._poll_log_queue()
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -343,6 +344,18 @@ class BotGui:
             if line:
                 self.log(f"{prefix} {line}")
         return proc.wait()
+
+    def _cleanup_old_exe(self) -> None:
+        """재빌드 재시작 후 남은 이전 GUI exe(_old)를 정리한다."""
+        old = os.path.join(REPO_DIR, "dist", "tts_bot_gui_old.exe")
+        for _ in range(10):
+            if not os.path.exists(old):
+                return
+            try:
+                os.remove(old)
+                return
+            except OSError:  # 이전 프로세스가 아직 종료 중
+                time.sleep(1)
 
     # ---------- 설정 (.env) ----------
 
@@ -416,22 +429,37 @@ class BotGui:
                 self.log("[빌드] tts_bot.exe 빌드 실패")
                 return
 
-            # 3) GUI exe 빌드 — 자기 자신(exe 실행 중)이면 _new 로 빌드 후 다음 실행 때 교체
-            gui_name = "tts_bot_gui"
+            # 3) GUI exe 빌드 — 실행 중인 자신은 덮어쓸 수 없지만 이름 변경은 가능하므로
+            #    자신을 _old 로 비켜두고 새 exe를 원래 이름으로 바로 빌드한다
             self_locked = False
             if FROZEN:
                 try:
                     self_locked = os.path.samefile(sys.executable, GUI_EXE)
                 except OSError:
                     self_locked = False
+            renamed_old = None
+            gui_name = "tts_bot_gui"
             if self_locked:
-                gui_name = "tts_bot_gui_new"
+                old_path = os.path.join(REPO_DIR, "dist", "tts_bot_gui_old.exe")
+                try:
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
+                    os.rename(GUI_EXE, old_path)
+                    renamed_old = old_path
+                except OSError:
+                    gui_name = "tts_bot_gui_new"  # 이름 변경 실패 시 예전 방식으로
+
             self.log(f"[빌드] {gui_name}.exe 빌드 중...")
             if self._stream_cmd(
                 [BUILD_ENV_PY, "-m", "PyInstaller", "--name", gui_name, *BUILD_GUI_ARGS],
                 "[빌드]",
             ) != 0:
                 self.log("[빌드] GUI exe 빌드 실패")
+                if renamed_old and not os.path.exists(GUI_EXE):
+                    try:
+                        os.rename(renamed_old, GUI_EXE)  # 실패 시 원상 복구
+                    except OSError:
+                        pass
                 return
 
             # 4) dist 에 설정/아이콘 복사
@@ -446,7 +474,22 @@ class BotGui:
                     shutil.copy2(src_path, os.path.join(dist, "icon", name))
 
             self.log("[빌드] 완료!")
-            if self_locked:
+            if renamed_old:
+                if self._ask_on_main(
+                    "재빌드 완료",
+                    "새 컨트롤 패널이 준비되었습니다. 지금 재시작해서 적용할까요?\n"
+                    "(봇도 자동으로 다시 시작됩니다)",
+                ):
+                    subprocess.Popen(
+                        [GUI_EXE, "--autostart"],
+                        cwd=os.path.dirname(GUI_EXE),
+                    )
+                    if self.tray:
+                        self.tray.stop()
+                    self.root.after(0, self.root.destroy)
+                else:
+                    self.log("[빌드] 다음에 GUI를 다시 실행하면 새 버전이 적용됩니다.")
+            elif gui_name == "tts_bot_gui_new":
                 self.log("[빌드] 새 GUI는 tts_bot_gui_new.exe 로 저장했습니다. "
                          "start_gui.bat 로 다시 실행하면 자동으로 교체됩니다.")
         finally:
