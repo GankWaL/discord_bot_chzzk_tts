@@ -6,6 +6,7 @@ venv/
 *.mp3
 bot.log
 google_tts_usage.json
+shutdown.flag
 build/
 build_env/
 dist/

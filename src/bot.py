@@ -38,6 +38,9 @@ BASE_DIR = (
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
+# GUI가 이 파일을 만들면 봇이 정상 로그아웃 후 스스로 종료한다
+SHUTDOWN_FLAG = os.path.join(BASE_DIR, "shutdown.flag")
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # PATH에 ffmpeg가 없어도 winget 설치 경로에서 찾아 쓴다
@@ -164,8 +167,35 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     print(f"[명령어 오류] {ctx.command}: {error}", flush=True)
 
 
+async def shutdown_watcher():
+    """종료 신호 파일이 생기면 음성 채널에서 나가고 정상 로그아웃한다."""
+    while True:
+        await asyncio.sleep(1)
+        if not os.path.exists(SHUTDOWN_FLAG):
+            continue
+        try:
+            os.remove(SHUTDOWN_FLAG)
+        except OSError:
+            pass
+        print("종료 요청을 받았습니다. 로그아웃 중...", flush=True)
+        for guild_id in list(sessions):
+            try:
+                await end_session(guild_id)
+            except Exception:
+                pass
+        await bot.close()
+        return
+
+
+_watcher_started = False
+
+
 @bot.event
 async def on_ready():
+    global _watcher_started
+    if not _watcher_started:
+        _watcher_started = True
+        asyncio.create_task(shutdown_watcher())
     print(f"봇 로그인 완료: {bot.user}")
     print(f"음성 지원(PyNaCl): {discord.voice_client.has_nacl}", flush=True)
     try:
@@ -469,7 +499,13 @@ async def help_command(ctx: commands.Context):
 def main():
     if not TOKEN:
         raise SystemExit(".env 파일에 DISCORD_TOKEN 을 설정해주세요. (.env.example 참고)")
+    # 이전 실행이 남긴 종료 신호가 있으면 제거 (시작하자마자 꺼지는 것 방지)
+    try:
+        os.remove(SHUTDOWN_FLAG)
+    except OSError:
+        pass
     bot.run(TOKEN)
+    print("봇이 정상적으로 종료되었습니다.", flush=True)
 
 
 if __name__ == "__main__":

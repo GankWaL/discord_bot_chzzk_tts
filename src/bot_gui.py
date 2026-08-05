@@ -632,6 +632,32 @@ class BotGui:
         )
 
     def _stop_bot(self) -> None:
+        # 봇이 실행 위치에 따라 다른 .env/플래그 경로를 보므로 양쪽에 신호를 남긴다
+        flags = [
+            os.path.join(REPO_DIR, "shutdown.flag"),
+            os.path.join(REPO_DIR, "dist", "shutdown.flag"),
+        ]
+        running = (self.proc is not None and self.proc.poll() is None) or find_bot_pids()
+
+        if running:
+            # 1단계: 정상 종료 요청 (디스코드 로그아웃 + 음성 채널 퇴장)
+            self.log("[봇] 정상 종료 요청 중... (디스코드 로그아웃)")
+            for flag in flags:
+                try:
+                    with open(flag, "w"):
+                        pass
+                except OSError:
+                    pass
+            for _ in range(8):  # 최대 약 8초 대기
+                time.sleep(1)
+                own_alive = self.proc is not None and self.proc.poll() is None
+                if not own_alive and not find_bot_pids():
+                    self.log("[봇] 정상 종료 완료")
+                    break
+            else:
+                self.log("[봇] 정상 종료 응답이 없어 강제 종료합니다")
+
+        # 2단계: 아직 살아있으면 강제 종료 (fallback)
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -651,6 +677,12 @@ class BotGui:
                 capture_output=True,
                 creationflags=NO_WINDOW,
             )
+        # 소비되지 않은 종료 신호 정리 (봇이 이미 꺼져 있던 경우)
+        for flag in flags:
+            try:
+                os.remove(flag)
+            except OSError:
+                pass
 
     # ---------- 상태 표시 ----------
 
