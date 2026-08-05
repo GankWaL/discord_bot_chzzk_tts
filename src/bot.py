@@ -15,6 +15,10 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+# exe(PyInstaller) 빌드에 음성용 PyNaCl이 확실히 포함되도록 명시 import
+import nacl.secret  # noqa: F401
+import nacl.utils  # noqa: F401
+
 import tts
 
 # 프로젝트 루트: exe(PyInstaller)면 실행 파일 위치, 아니면 src/ 의 상위 폴더
@@ -119,6 +123,7 @@ async def end_session(guild_id: int) -> None:
 @bot.event
 async def on_ready():
     print(f"봇 로그인 완료: {bot.user}")
+    print(f"음성 지원(PyNaCl): {discord.voice_client.has_nacl}", flush=True)
 
 
 @bot.event

@@ -143,6 +143,7 @@ class BotGui:
             pystray.MenuItem("봇 재시작", self._tray_restart),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("컨트롤 패널 종료 (봇은 유지)", self._tray_quit),
+            pystray.MenuItem("완전 종료 (봇도 종료)", self._tray_quit_all),
         )
         self.tray = pystray.Icon(
             "discord_tts_bot", make_tray_image(), "디스코드 TTS 봇", menu
@@ -164,6 +165,18 @@ class BotGui:
         self.run_action("restart")
 
     def _tray_quit(self, icon=None, item=None) -> None:
+        if self.tray:
+            self.tray.stop()
+        self.root.after(0, self.root.destroy)
+
+    def _tray_quit_all(self, icon=None, item=None) -> None:
+        threading.Thread(target=self._quit_all, daemon=True).start()
+
+    def _quit_all(self) -> None:
+        try:
+            self._stop_bot()
+        except Exception:
+            pass
         if self.tray:
             self.tray.stop()
         self.root.after(0, self.root.destroy)

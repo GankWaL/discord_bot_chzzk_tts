@@ -94,7 +94,7 @@ copy .env.example .env
 
 - **실행 / 종료 / 재시작** 버튼과 봇 상태 표시 (외부에서 실행된 봇도 감지·제어)
 - 봇 로그(bot.log) 실시간 확인
-- 창을 닫으면 종료되지 않고 **트레이로 최소화** — 트레이 아이콘 우클릭 → 창 열기 / 봇 재시작 / 컨트롤 패널 종료
+- 창을 닫으면 종료되지 않고 **트레이로 최소화** — 트레이 아이콘 우클릭 → 창 열기 / 봇 재시작 / 컨트롤 패널 종료(봇 유지) / 완전 종료(봇도 종료)
 
 ## 구조
 
@@ -117,7 +117,7 @@ copy .env.example .env
 ```powershell
 python -m venv build_env
 build_env\Scripts\python -m pip install -r requirements.txt pyinstaller
-build_env\Scripts\python -m PyInstaller --noconfirm --onefile --icon icon\icon.ico --name tts_bot src\bot.py
+build_env\Scripts\python -m PyInstaller --noconfirm --onefile --icon icon\icon.ico --name tts_bot --collect-all nacl --collect-all davey --hidden-import _cffi_backend src\bot.py
 build_env\Scripts\python -m PyInstaller --noconfirm --onefile --windowed --icon icon\icon.ico --name tts_bot_gui src\bot_gui.py
 ```
 
