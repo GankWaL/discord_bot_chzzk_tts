@@ -14,6 +14,7 @@
 import os
 import queue
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -54,6 +55,36 @@ ICON_PNG = os.path.join(REPO_DIR, "icon", "icon.png")
 ICON_ICO = os.path.join(REPO_DIR, "icon", "icon.ico")
 NO_WINDOW = subprocess.CREATE_NO_WINDOW
 MAX_LOG_LINES = 2000
+
+# 단일 인스턴스 잠금용 로컬 포트 (다른 앱과 겹치지 않도록 배너로 검증)
+SINGLETON_HOST = "127.0.0.1"
+SINGLETON_PORT = 51765
+SINGLETON_BANNER = b"TTSBOTGUI"
+
+
+def try_acquire_singleton() -> socket.socket | None:
+    """포트를 선점해 단일 인스턴스 잠금을 얻는다. 실패하면 None (이미 실행 중)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((SINGLETON_HOST, SINGLETON_PORT))
+        sock.listen(1)
+        return sock
+    except OSError:
+        sock.close()
+        return None
+
+
+def notify_existing_instance(autostart: bool) -> bool:
+    """이미 실행 중인 GUI에 창을 띄우라고 요청한다. 성공 여부를 반환."""
+    try:
+        with socket.create_connection((SINGLETON_HOST, SINGLETON_PORT), timeout=2) as conn:
+            conn.settimeout(2)
+            if conn.recv(16) != SINGLETON_BANNER:
+                return False  # 우리 GUI가 아닌 다른 앱이 포트를 쓰는 중
+            conn.sendall(b"show autostart" if autostart else b"show")
+            return True
+    except OSError:
+        return False
 
 ENV_FIELDS = [
     ("DISCORD_TOKEN", "디스코드 봇 토큰 (필수)"),
@@ -209,13 +240,14 @@ class EnvDialog(tk.Toplevel):
 
 
 class BotGui:
-    def __init__(self, root: tk.Tk, autostart: bool = False):
+    def __init__(self, root: tk.Tk, autostart: bool = False, lock_sock: socket.socket | None = None):
         self.root = root
         self.proc: subprocess.Popen | None = None
         self.log_handle = None
         self.log_queue: queue.Queue = queue.Queue()
         self.busy = False
         self.tray = None
+        self.lock_sock = lock_sock
 
         root.title("디스코드 TTS 봇 컨트롤 패널")
         if os.path.exists(ICON_ICO):
@@ -286,6 +318,8 @@ class BotGui:
         threading.Thread(target=self._tail_log_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
         threading.Thread(target=self._cleanup_old_exe, daemon=True).start()
+        if self.lock_sock:
+            threading.Thread(target=self._singleton_listener, daemon=True).start()
         self._poll_log_queue()
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -344,6 +378,29 @@ class BotGui:
             if line:
                 self.log(f"{prefix} {line}")
         return proc.wait()
+
+    def _singleton_listener(self) -> None:
+        """두 번째 실행 시도가 들어오면 기존 창을 앞으로 가져온다."""
+        while True:
+            try:
+                conn, _ = self.lock_sock.accept()
+            except OSError:  # 소켓이 닫힘 (재시작 등)
+                return
+            with conn:
+                try:
+                    conn.sendall(SINGLETON_BANNER)
+                    conn.settimeout(2)
+                    data = conn.recv(32)
+                except OSError:
+                    continue
+            if not data.startswith(b"show"):
+                continue
+            self._tray_show()
+            # 시작 프로그램 등에서 --autostart 로 재실행됐다면 봇도 켜준다
+            if b"autostart" in data:
+                own = self.proc is not None and self.proc.poll() is None
+                if not self.busy and not own and not find_bot_pids():
+                    self.run_action("start")
 
     def _cleanup_old_exe(self) -> None:
         """재빌드 재시작 후 남은 이전 GUI exe(_old)를 정리한다."""
@@ -480,6 +537,13 @@ class BotGui:
                     "새 컨트롤 패널이 준비되었습니다. 지금 재시작해서 적용할까요?\n"
                     "(봇도 자동으로 다시 시작됩니다)",
                 ):
+                    # 새 인스턴스가 단일 인스턴스 잠금을 얻을 수 있도록 먼저 해제
+                    if self.lock_sock:
+                        try:
+                            self.lock_sock.close()
+                        except OSError:
+                            pass
+                        self.lock_sock = None
                     subprocess.Popen(
                         [GUI_EXE, "--autostart"],
                         cwd=os.path.dirname(GUI_EXE),
@@ -793,12 +857,20 @@ class BotGui:
 
 def main() -> None:
     autostart = "--autostart" in sys.argv
+
+    # 단일 인스턴스: 이미 실행 중이면 기존 창을 앞으로 가져오고 종료
+    lock_sock = try_acquire_singleton()
+    if lock_sock is None:
+        if notify_existing_instance(autostart):
+            return
+        # 포트를 다른 앱이 쓰는 드문 경우 — 잠금 없이 그냥 실행
+
     root = tk.Tk()
     try:
         ttk.Style().theme_use("vista")
     except tk.TclError:
         pass
-    BotGui(root, autostart=autostart)
+    BotGui(root, autostart=autostart, lock_sock=lock_sock)
     root.mainloop()
     os._exit(0)  # pystray 스레드가 남아도 확실히 종료
 
