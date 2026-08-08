@@ -64,6 +64,26 @@ def _tts_server_port_open() -> bool:
         return False
 
 
+def _tts_server_process_exists() -> bool:
+    """로딩 중이라 포트가 아직 안 열린 서버까지 감지한다 (GUI 자동 시작과의 중복 방지)."""
+    cmd = (
+        "Get-CimInstance Win32_Process -Filter \"Name='python.exe' or Name='pythonw.exe'\" "
+        "| Where-Object { $_.CommandLine -match 'custom_tts_server' } "
+        "| Select-Object -ExpandProperty ProcessId"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return any(line.strip().isdigit() for line in out.split())
+
+
 def start_custom_tts_server() -> None:
     """커스텀 목소리와 추론 환경이 준비돼 있으면 서버를 자식 프로세스로 시작한다."""
     global _tts_server_proc
@@ -71,7 +91,7 @@ def start_custom_tts_server() -> None:
         return  # 추론 환경 미구성 — 커스텀 목소리 없이 동작
     if not tts.custom_voices():
         return  # 커스텀 목소리가 없으면 띄울 필요 없음
-    if _tts_server_port_open():
+    if _tts_server_port_open() or _tts_server_process_exists():
         print("커스텀 TTS 서버: 이미 실행 중인 서버를 사용합니다", flush=True)
         return
     log = open(TTS_SERVER_LOG, "w", encoding="utf-8")

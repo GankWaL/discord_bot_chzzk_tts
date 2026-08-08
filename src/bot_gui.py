@@ -185,6 +185,38 @@ def find_tts_server_pids() -> list:
     return [int(line) for line in out.split() if line.strip().isdigit()]
 
 
+TTS_SERVER_PY = os.path.join(REPO_DIR, "tts_env", "Scripts", "python.exe")
+TTS_SERVER_SCRIPT = os.path.join(REPO_DIR, "src", "custom_tts_server.py")
+TTS_SERVER_LOG = os.path.join(REPO_DIR, "tts_server.log")
+
+
+def tts_env_ready() -> bool:
+    return os.path.exists(TTS_SERVER_PY) and os.path.exists(TTS_SERVER_SCRIPT)
+
+
+def has_custom_voices() -> bool:
+    models = os.path.join(REPO_DIR, "my_voice_models")
+    if os.path.isdir(models):
+        for name in os.listdir(models):
+            if os.path.isfile(os.path.join(models, name, "sovits.pth")):
+                return True
+    datasets = os.path.join(REPO_DIR, "my_voice")
+    if os.path.isdir(datasets):
+        for name in os.listdir(datasets):
+            meta = os.path.join(datasets, name, "metadata.csv")
+            if os.path.isfile(meta) and os.path.getsize(meta) > 0:
+                return True
+    return False
+
+
+def tts_server_running() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 51770), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
 def system_python() -> str | None:
     """시스템 파이썬 경로 (소스 실행 시엔 자기 자신)."""
     if not FROZEN:
@@ -344,6 +376,7 @@ class BotGui:
         threading.Thread(target=self._tail_log_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
         threading.Thread(target=self._cleanup_old_exe, daemon=True).start()
+        threading.Thread(target=self._auto_start_tts_server, daemon=True).start()
         if self.lock_sock:
             threading.Thread(target=self._singleton_listener, daemon=True).start()
         self._poll_log_queue()
@@ -453,27 +486,38 @@ class BotGui:
             return
         voice_studio.VoiceStudio(self.root, REPO_DIR)
 
-    def start_tts_server(self) -> None:
-        """커스텀 TTS 추론 서버를 새 콘솔 창으로 띄운다 (이미 떠 있으면 안내)."""
+    def _auto_start_tts_server(self) -> None:
+        """GUI 시작 시 커스텀 TTS 서버를 자동으로 미리 띄운다 (조건 충족 시)."""
+        if not tts_env_ready() or not has_custom_voices():
+            return
+        if tts_server_running() or find_tts_server_pids():
+            self.log("[TTS 서버] 이미 실행 중입니다.")
+            return
         try:
-            with socket.create_connection(("127.0.0.1", 51770), timeout=1):
-                messagebox.showinfo("커스텀 TTS 서버", "서버가 이미 실행 중입니다.")
-                return
-        except OSError:
-            pass
-        server_py = os.path.join(REPO_DIR, "tts_env", "Scripts", "python.exe")
-        if not os.path.exists(server_py):
+            log = open(TTS_SERVER_LOG, "w", encoding="utf-8")
+            subprocess.Popen(
+                [TTS_SERVER_PY, TTS_SERVER_SCRIPT],
+                cwd=REPO_DIR,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=NO_WINDOW,
+            )
+            self.log("[TTS 서버] 자동 시작했습니다 (모델 로딩까지 수십 초, 로그: tts_server.log)")
+        except OSError as e:
+            self.log(f"[TTS 서버] 자동 시작 실패: {e}")
+
+    def start_tts_server(self) -> None:
+        """수동 시작 버튼 — 자동 시작이 안 된 경우(환경 방금 구성 등)에 사용."""
+        if tts_server_running() or find_tts_server_pids():
+            messagebox.showinfo("커스텀 TTS 서버", "서버가 이미 실행 중입니다.")
+            return
+        if not tts_env_ready():
             messagebox.showinfo(
                 "커스텀 TTS 서버",
-                "tts_env 환경이 없습니다. README의 '내 목소리' 섹션을 참고해 구성해주세요.",
+                "추론 환경이 없습니다. bat\\setup_tts_server.bat 을 먼저 실행해주세요.",
             )
             return
-        subprocess.Popen(
-            [server_py, os.path.join(REPO_DIR, "src", "custom_tts_server.py")],
-            cwd=REPO_DIR,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
-        self.log("[TTS 서버] 새 콘솔 창에서 시작했습니다. 모델 로딩까지 수십 초 걸릴 수 있어요.")
+        self._auto_start_tts_server()
 
     # ---------- 설정 (.env) ----------
 
