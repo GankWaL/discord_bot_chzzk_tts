@@ -5,6 +5,7 @@ venv/
 .venv/
 *.mp3
 bot.log
+tts_server.log
 google_tts_usage.json
 shutdown.flag
 user_settings.json

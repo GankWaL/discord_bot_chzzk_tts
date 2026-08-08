@@ -11,6 +11,8 @@ import json
 import os
 import random
 import shutil
+import socket
+import subprocess
 import sys
 
 import discord
@@ -45,6 +47,54 @@ SHUTDOWN_FLAG = os.path.join(BASE_DIR, "shutdown.flag")
 
 # 유저별 마지막 목소리/속도/감정 설정 저장 파일
 SETTINGS_FILE = os.path.join(BASE_DIR, "user_settings.json")
+
+# 커스텀 TTS 서버 — 봇이 켜질 때 함께 띄우고 꺼질 때 함께 내린다
+TTS_ROOT = os.path.dirname(tts.MY_VOICE_DIR)
+TTS_ENV_PY = os.path.join(TTS_ROOT, "tts_env", "Scripts", "python.exe")
+TTS_SERVER_SCRIPT = os.path.join(TTS_ROOT, "src", "custom_tts_server.py")
+TTS_SERVER_LOG = os.path.join(TTS_ROOT, "tts_server.log")
+_tts_server_proc: subprocess.Popen | None = None
+
+
+def _tts_server_port_open() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 51770), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def start_custom_tts_server() -> None:
+    """커스텀 목소리와 추론 환경이 준비돼 있으면 서버를 자식 프로세스로 시작한다."""
+    global _tts_server_proc
+    if not os.path.exists(TTS_ENV_PY) or not os.path.exists(TTS_SERVER_SCRIPT):
+        return  # 추론 환경 미구성 — 커스텀 목소리 없이 동작
+    if not tts.custom_voices():
+        return  # 커스텀 목소리가 없으면 띄울 필요 없음
+    if _tts_server_port_open():
+        print("커스텀 TTS 서버: 이미 실행 중인 서버를 사용합니다", flush=True)
+        return
+    log = open(TTS_SERVER_LOG, "w", encoding="utf-8")
+    _tts_server_proc = subprocess.Popen(
+        [TTS_ENV_PY, TTS_SERVER_SCRIPT],
+        cwd=TTS_ROOT,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    print("커스텀 TTS 서버를 함께 시작했습니다 (모델 로딩까지 수십 초)", flush=True)
+
+
+def stop_custom_tts_server() -> None:
+    global _tts_server_proc
+    if _tts_server_proc and _tts_server_proc.poll() is None:
+        _tts_server_proc.terminate()
+        try:
+            _tts_server_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _tts_server_proc.kill()
+        print("커스텀 TTS 서버를 종료했습니다", flush=True)
+    _tts_server_proc = None
 
 
 def load_all_settings() -> dict:
@@ -563,7 +613,11 @@ def main():
         os.remove(SHUTDOWN_FLAG)
     except OSError:
         pass
-    bot.run(TOKEN)
+    start_custom_tts_server()
+    try:
+        bot.run(TOKEN)
+    finally:
+        stop_custom_tts_server()
     print("봇이 정상적으로 종료되었습니다.", flush=True)
 
 

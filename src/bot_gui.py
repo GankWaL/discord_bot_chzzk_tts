@@ -165,6 +165,26 @@ def find_bot_pids() -> list:
     return [int(line) for line in out.split() if line.strip().isdigit()]
 
 
+def find_tts_server_pids() -> list:
+    """커스텀 TTS 서버 프로세스 PID 목록."""
+    cmd = (
+        "Get-CimInstance Win32_Process -Filter \"Name='python.exe' or Name='pythonw.exe'\" "
+        "| Where-Object { $_.CommandLine -match 'custom_tts_server' } "
+        "| Select-Object -ExpandProperty ProcessId"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=NO_WINDOW,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [int(line) for line in out.split() if line.strip().isdigit()]
+
+
 def system_python() -> str | None:
     """시스템 파이썬 경로 (소스 실행 시엔 자기 자신)."""
     if not FROZEN:
@@ -820,6 +840,13 @@ class BotGui:
                 pass
             self.log_handle = None
         for pid in find_bot_pids():
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F"],
+                capture_output=True,
+                creationflags=NO_WINDOW,
+            )
+        # 봇이 강제 종료되어 고아가 된 커스텀 TTS 서버도 정리
+        for pid in find_tts_server_pids():
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F"],
                 capture_output=True,
