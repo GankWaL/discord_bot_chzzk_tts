@@ -283,6 +283,9 @@ class BotGui:
         self.build_btn = ttk.Button(tools, text="exe 재빌드", command=self.rebuild)
         self.build_btn.pack(side="left", padx=2)
 
+        self.voice_btn = ttk.Button(tools, text="내 목소리 만들기", command=self.open_voice_studio)
+        self.voice_btn.pack(side="left", padx=2)
+
         self.update_btn = ttk.Button(tools, text="업데이트 확인", command=self.check_update)
         self.update_btn.pack(side="right", padx=2)
 
@@ -413,6 +416,19 @@ class BotGui:
                 return
             except OSError:  # 이전 프로세스가 아직 종료 중
                 time.sleep(1)
+
+    # ---------- 내 목소리 만들기 ----------
+
+    def open_voice_studio(self) -> None:
+        try:
+            import voice_studio
+        except ImportError:
+            messagebox.showinfo(
+                "내 목소리 만들기",
+                "녹음 기능에 필요한 라이브러리가 없습니다.\n[환경 설치] 버튼으로 설치 후 GUI를 다시 실행해주세요.",
+            )
+            return
+        voice_studio.VoiceStudio(self.root, REPO_DIR)
 
     # ---------- 설정 (.env) ----------
 
