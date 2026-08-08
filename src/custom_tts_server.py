@@ -126,6 +126,25 @@ def switch_voice(voice_name: str) -> None:
     current_voice = target
 
 
+TARGET_RMS_DB = -20.0  # 합성 결과를 일반 TTS 수준 음량으로 정규화
+
+
+def normalize_loudness(audio):
+    """녹음/모델 음량과 무관하게 일정한 출력 음량을 보장한다."""
+    import numpy as np
+
+    audio = np.asarray(audio)
+    if np.issubdtype(audio.dtype, np.integer):
+        audio = audio.astype(np.float32) / 32768.0
+    audio = audio.astype(np.float32)
+
+    rms = float(np.sqrt(np.mean(audio**2)) + 1e-12)
+    gain = 10 ** ((TARGET_RMS_DB - 20 * np.log10(rms)) / 20)
+    peak = float(np.abs(audio).max() + 1e-12)
+    gain = min(gain, 0.99 / peak)  # 클리핑 방지
+    return audio * gain
+
+
 def synthesize(text: str, voice_name: str, speed: float = 1.0) -> bytes:
     import numpy as np
     import soundfile as sf
@@ -143,8 +162,9 @@ def synthesize(text: str, voice_name: str, speed: float = 1.0) -> bytes:
         })
         sr, audio = next(gen)
 
+    audio = normalize_loudness(audio)
     buf = io.BytesIO()
-    sf.write(buf, np.asarray(audio), sr, format="WAV")
+    sf.write(buf, (audio * 32767).astype(np.int16), sr, format="WAV")
     return buf.getvalue()
 
 

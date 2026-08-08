@@ -274,6 +274,13 @@ class VoiceStudio(tk.Toplevel):
             self.status_label.config(text="녹음이 너무 짧아 저장하지 않았습니다 (0.5초 미만)")
             return
 
+        # 마이크 게인과 무관하게 일정한 음량으로 저장 (피크 -1dB 정규화)
+        peak = float(np.abs(audio).max())
+        if peak < 0.02:
+            self.status_label.config(text="⚠ 마이크 입력이 매우 작습니다 — 마이크 설정을 확인하고 다시 녹음해주세요")
+            return
+        audio = audio * (0.9 / peak)
+
         os.makedirs(os.path.dirname(self._wav_path(self.idx)), exist_ok=True)
         sf.write(self._wav_path(self.idx), audio, SAMPLE_RATE)
         self._rewrite_metadata()
