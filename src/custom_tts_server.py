@@ -32,10 +32,28 @@ PRETRAINED = os.path.join(SOVITS_REPO, "GPT_SoVITS", "pretrained_models", "gsv-v
 DEFAULT_GPT = os.path.join(PRETRAINED, "s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt")
 DEFAULT_SOVITS = os.path.join(PRETRAINED, "s2G2333k.pth")
 
+STATE_FILE = os.path.join(BASE_DIR, "tts_server_state.json")
+
 pipe = None
 device = "cpu"
 current_voice = None  # 현재 가중치가 로드된 목소리 이름 ("__default__" = 사전학습)
 lock = threading.Lock()  # 합성은 한 번에 하나씩 (GPU 직렬화)
+
+
+def _load_last_voice() -> str | None:
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f).get("last_voice")
+    except (OSError, ValueError):
+        return None
+
+
+def _save_last_voice(voice_name: str) -> None:
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"last_voice": voice_name}, f, ensure_ascii=False)
+    except OSError:
+        pass
 
 
 def finetuned_dir(voice_name: str) -> str | None:
@@ -88,8 +106,23 @@ def get_reference(voice_name: str) -> tuple:
     return best[0], best[1]
 
 
-def load_pipeline() -> None:
-    global pipe, device
+def pick_startup_voice() -> str | None:
+    """서버 시작 시 바로 로드할 목소리 — 마지막 사용 > 학습된 목소리 > 첫 목소리."""
+    voices = list_custom_voices()
+    if not voices:
+        return None
+    last = _load_last_voice()
+    if last in voices:
+        return last
+    for v in voices:
+        if finetuned_dir(v):
+            return v
+    return voices[0]
+
+
+def load_pipeline(initial_voice: str | None = None) -> None:
+    """파이프라인을 로드한다. initial_voice 가 있으면 그 가중치로 바로 시작한다."""
+    global pipe, device, current_voice
     import torch
 
     os.chdir(SOVITS_REPO)  # tts_infer.yaml 등 상대경로 기준
@@ -98,14 +131,43 @@ def load_pipeline() -> None:
     from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[서버] GPT-SoVITS 파이프라인 로딩 중... ({device})", flush=True)
+    ft = finetuned_dir(initial_voice) if initial_voice else None
+    label = f"'{initial_voice}' 가중치" if ft else "기본 가중치"
+    print(f"[서버] GPT-SoVITS 파이프라인 로딩 중... ({device}, {label})", flush=True)
+
     cfg = TTS_Config("GPT_SoVITS/configs/tts_infer.yaml")
     cfg.device = device
     cfg.is_half = device == "cuda"
-    cfg.t2s_weights_path = DEFAULT_GPT
-    cfg.vits_weights_path = DEFAULT_SOVITS
+    if ft:
+        cfg.t2s_weights_path = os.path.join(ft, "gpt.ckpt")
+        cfg.vits_weights_path = os.path.join(ft, "sovits.pth")
+        current_voice = initial_voice
+    else:
+        cfg.t2s_weights_path = DEFAULT_GPT
+        cfg.vits_weights_path = DEFAULT_SOVITS
+        current_voice = "__default__"
     pipe = TTS(cfg)
     print("[서버] 파이프라인 로딩 완료", flush=True)
+
+
+def warmup(voice_name: str) -> None:
+    """참조 음성 특징 추출 + CUDA 커널 초기화를 미리 수행해 첫 요청을 빠르게 한다."""
+    import time
+
+    t = time.time()
+    print(f"[서버] '{voice_name}' 웜업 중...", flush=True)
+    with lock:
+        switch_voice(voice_name)
+        ref_audio, ref_text = get_reference(voice_name)
+        gen = pipe.run({
+            "text": "준비 완료.",
+            "text_lang": "ko",
+            "ref_audio_path": ref_audio,
+            "prompt_text": ref_text,
+            "prompt_lang": "ko",
+        })
+        next(gen)
+    print(f"[서버] 웜업 완료 ({time.time() - t:.1f}초) — 첫 문장부터 빠르게 응답합니다", flush=True)
 
 
 def switch_voice(voice_name: str) -> None:
@@ -163,6 +225,7 @@ def synthesize(text: str, voice_name: str, speed: float = 1.0) -> bytes:
         sr, audio = next(gen)
 
     audio = normalize_loudness(audio)
+    _save_last_voice(voice_name)  # 다음 서버 시작 때 이 목소리를 바로 로드
     buf = io.BytesIO()
     sf.write(buf, (audio * 32767).astype(np.int16), sr, format="WAV")
     return buf.getvalue()
@@ -186,6 +249,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if self.path == "/warmup":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                voice = payload.get("voice")
+                if voice and voice in list_custom_voices():
+                    warmup(voice)
+                self._send_json({"status": "ok"})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
         if self.path != "/synthesize":
             self._send_json({"error": "not found"}, 404)
             return
@@ -220,9 +294,13 @@ def main() -> None:
             pass
     if not os.path.isdir(SOVITS_REPO):
         raise SystemExit("GPT-SoVITS 저장소가 없습니다. bat\\setup_tts_server.bat 을 먼저 실행해주세요.")
-    load_pipeline()
+    startup_voice = pick_startup_voice()
+    load_pipeline(startup_voice)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"[서버] http://{HOST}:{PORT} 에서 대기 중 (Ctrl+C 로 종료)", flush=True)
+    # 대기 시작 후 백그라운드로 웜업 — health 응답은 즉시, 첫 합성은 빠르게
+    if startup_voice:
+        threading.Thread(target=lambda: warmup(startup_voice), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

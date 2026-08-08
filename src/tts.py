@@ -248,6 +248,20 @@ async def _synthesize_edge(text: str, voice_id: str, speed: float) -> str:
     return path
 
 
+async def warmup_custom(voice_name: str) -> None:
+    """커스텀 목소리 웜업 요청 — 실패해도 무시 (첫 합성이 조금 느려질 뿐)."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{CUSTOM_TTS_URL}/warmup",
+                json={"voice": voice_name},
+                timeout=aiohttp.ClientTimeout(total=300),
+            ):
+                pass
+    except Exception:
+        pass
+
+
 async def _synthesize_custom(text: str, voice_name: str, speed: float = DEFAULT_SPEED) -> str:
     """로컬 추론 서버(GPT-SoVITS)로 내 목소리 합성. 감정은 미지원."""
     payload = {"text": text, "voice": voice_name, "speed": speed}

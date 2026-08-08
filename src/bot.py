@@ -418,6 +418,11 @@ async def start(ctx: commands.Context, *, bot_name: str | None = None):
     session.player_task = asyncio.create_task(player_loop(session))
     sessions[ctx.guild.id] = session
 
+    # 커스텀 목소리면 첫 채팅 전에 미리 웜업 (가중치 전환 + 특징 추출)
+    voice_info = tts.available_voices().get(session.voice, {})
+    if voice_info.get("engine") == "custom":
+        asyncio.create_task(tts.warmup_custom(session.voice))
+
     voice_label = f"현재 목소리: {session.voice}"
     if random_voice:
         voice_label = f"랜덤 목소리 선택: **{session.voice}**"
@@ -470,6 +475,8 @@ async def set_voice(ctx: commands.Context, *, voice_name: str | None = None):
 
     session.voice = voice_name
     save_user_setting(ctx.author.id, voice=voice_name)
+    if tts.available_voices().get(voice_name, {}).get("engine") == "custom":
+        asyncio.create_task(tts.warmup_custom(voice_name))  # 첫 채팅 전 미리 준비
     prefix = "랜덤으로 " if picked_random else ""
     await ctx.send(f"{prefix}목소리를 **{voice_name}** (으)로 변경했어요.")
 
