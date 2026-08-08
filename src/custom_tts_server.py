@@ -1,43 +1,46 @@
-"""커스텀 TTS 추론 서버 (Qwen3-TTS 제로샷 보이스 클로닝).
+"""커스텀 TTS 추론 서버 (GPT-SoVITS v2).
 
-my_voice/<이름>/ 의 녹음 데이터를 참조 음성으로 사용해 그 목소리로 합성한다.
+my_voice_models/<이름>/ 의 파인튜닝 가중치(sovits.pth + gpt.ckpt)로 합성하며,
+가중치가 없는 목소리는 my_voice/<이름>/ 녹음을 참조 음성으로 한 제로샷으로 동작한다.
 봇(tts.py)은 이 서버에 HTTP 로 요청만 보내므로, 무거운 torch/모델 의존성은
 tts_env 가상환경에만 존재한다.
 
-실행: bat\\start_tts_server.bat  (또는 tts_env\\Scripts\\python src\\custom_tts_server.py)
+사전 준비: bat\\setup_tts_server.bat (최초 1회)
+실행:      bat\\start_tts_server.bat  (또는 tts_env\\Scripts\\python src\\custom_tts_server.py)
 
 API:
     GET  /health              → {"status": "ok", "device": "cuda"}
-    GET  /voices              → {"voices": ["내목소리", ...]}
-    POST /synthesize          → {"text": ..., "voice": ...} 요청, WAV 바이트 응답
+    GET  /voices              → {"voices": ["왈", ...]}
+    POST /synthesize          → {"text", "voice", "speed"} 요청, WAV 바이트 응답
 """
 
 import io
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import soundfile as sf
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOVITS_REPO = os.path.join(BASE_DIR, "GPT-SoVITS")
 MY_VOICE_DIR = os.path.join(BASE_DIR, "my_voice")
 MY_VOICE_MODELS_DIR = os.path.join(BASE_DIR, "my_voice_models")
 HOST = "127.0.0.1"
 PORT = 51770
-MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 
-# VRAM 한계로 모델은 한 번에 하나만 올린다.
-# loaded_kind: "base"(제로샷 클로닝용) 또는 파인튜닝된 목소리 이름
-model = None
-loaded_kind = None
+PRETRAINED = os.path.join(SOVITS_REPO, "GPT_SoVITS", "pretrained_models", "gsv-v2final-pretrained")
+DEFAULT_GPT = os.path.join(PRETRAINED, "s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt")
+DEFAULT_SOVITS = os.path.join(PRETRAINED, "s2G2333k.pth")
+
+pipe = None
 device = "cpu"
-clone_prompts: dict = {}  # 목소리 이름 -> 재사용 가능한 클로닝 프롬프트
+current_voice = None  # 현재 가중치가 로드된 목소리 이름 ("__default__" = 사전학습)
+lock = threading.Lock()  # 합성은 한 번에 하나씩 (GPU 직렬화)
 
 
-def finetuned_model_dir(voice_name: str) -> str | None:
+def finetuned_dir(voice_name: str) -> str | None:
     path = os.path.join(MY_VOICE_MODELS_DIR, voice_name)
-    if os.path.isfile(os.path.join(path, "config.json")):
+    if os.path.isfile(os.path.join(path, "sovits.pth")) and os.path.isfile(os.path.join(path, "gpt.ckpt")):
         return path
     return None
 
@@ -51,99 +54,97 @@ def list_custom_voices() -> list:
                 voices.add(name)
     if os.path.isdir(MY_VOICE_MODELS_DIR):
         for name in os.listdir(MY_VOICE_MODELS_DIR):
-            if finetuned_model_dir(name):
+            if finetuned_dir(name):
                 voices.add(name)
     return sorted(voices)
 
 
-def _load(model_path: str, kind: str) -> None:
-    """모델을 로드한다. 이미 다른 모델이 올라가 있으면 내리고 교체한다."""
-    global model, loaded_kind, device
-    import torch
-    from qwen_tts import Qwen3TTSModel
-
-    if loaded_kind == kind:
-        return
-    if model is not None:
-        print(f"[서버] '{loaded_kind}' 모델 해제 중...", flush=True)
-        del model
-        model = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-    print(f"[서버] 모델 로딩 중... ({model_path}, {device})", flush=True)
-    model = Qwen3TTSModel.from_pretrained(
-        model_path,
-        device_map=device,
-        dtype=dtype,
-    )
-    loaded_kind = kind
-    clone_prompts.clear()  # 이전 모델로 만든 프롬프트는 무효
-    print("[서버] 모델 로딩 완료", flush=True)
-
-
-def load_model() -> None:
-    _load(MODEL_ID, "base")
-
-
 def get_reference(voice_name: str) -> tuple:
-    """데이터셋에서 참조 음성 하나를 고른다 (가장 긴 녹음 = 안정적)."""
+    """(참조 wav 경로, 참조 문장) — 파인튜닝 목소리는 패키지의 ref, 아니면 가장 긴 녹음."""
+    ft = finetuned_dir(voice_name)
+    if ft:
+        ref_text = voice_name
+        meta_path = os.path.join(ft, "meta.json")
+        if os.path.isfile(meta_path):
+            with open(meta_path, encoding="utf-8") as f:
+                ref_text = json.load(f).get("ref_text", ref_text)
+        return os.path.join(ft, "ref.wav"), ref_text
+
     dataset = os.path.join(MY_VOICE_DIR, voice_name)
-    meta_path = os.path.join(dataset, "metadata.csv")
     best = None
-    with open(meta_path, encoding="utf-8") as f:
+    with open(os.path.join(dataset, "metadata.csv"), encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or "|" not in line:
                 continue
             fname, _, text = line.partition("|")
-            wav_path = os.path.join(dataset, "wavs", fname)
-            if not os.path.exists(wav_path):
-                continue
-            size = os.path.getsize(wav_path)
-            if best is None or size > best[2]:
-                best = (wav_path, text, size)
+            wav = os.path.join(dataset, "wavs", fname)
+            if os.path.exists(wav):
+                size = os.path.getsize(wav)
+                if best is None or size > best[2]:
+                    best = (wav, text, size)
     if best is None:
         raise FileNotFoundError(f"'{voice_name}' 데이터셋에 사용할 녹음이 없습니다")
     return best[0], best[1]
 
 
-def get_clone_prompt(voice_name: str):
-    if voice_name not in clone_prompts:
-        ref_audio, ref_text = get_reference(voice_name)
-        print(f"[서버] '{voice_name}' 클로닝 프롬프트 생성 중... (참조: {os.path.basename(ref_audio)})", flush=True)
-        clone_prompts[voice_name] = model.create_voice_clone_prompt(
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            x_vector_only_mode=False,
-        )
-    return clone_prompts[voice_name]
+def load_pipeline() -> None:
+    global pipe, device
+    import torch
+
+    os.chdir(SOVITS_REPO)  # tts_infer.yaml 등 상대경로 기준
+    sys.path.insert(0, SOVITS_REPO)
+    sys.path.insert(0, os.path.join(SOVITS_REPO, "GPT_SoVITS"))
+    from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[서버] GPT-SoVITS 파이프라인 로딩 중... ({device})", flush=True)
+    cfg = TTS_Config("GPT_SoVITS/configs/tts_infer.yaml")
+    cfg.device = device
+    cfg.is_half = device == "cuda"
+    cfg.t2s_weights_path = DEFAULT_GPT
+    cfg.vits_weights_path = DEFAULT_SOVITS
+    pipe = TTS(cfg)
+    print("[서버] 파이프라인 로딩 완료", flush=True)
 
 
-def synthesize(text: str, voice_name: str) -> bytes:
-    ft_dir = finetuned_model_dir(voice_name)
-    if ft_dir:
-        # 파인튜닝된 모델이 있으면 그 모델로 합성 (필요 시 모델 교체)
-        _load(ft_dir, voice_name)
-        speaker = voice_name
-        meta_path = os.path.join(ft_dir, "meta.json")
-        if os.path.isfile(meta_path):
-            with open(meta_path, encoding="utf-8") as f:
-                speaker = json.load(f).get("speaker", voice_name)
-        wavs, sr = model.generate_custom_voice(text=text, speaker=speaker)
+def switch_voice(voice_name: str) -> None:
+    """요청된 목소리의 가중치로 전환한다 (수 초, 이미 로드돼 있으면 생략)."""
+    global current_voice
+    ft = finetuned_dir(voice_name)
+    target = voice_name if ft else "__default__"
+    if current_voice == target:
+        return
+    if ft:
+        print(f"[서버] '{voice_name}' 학습 가중치 로드 중...", flush=True)
+        pipe.init_t2s_weights(os.path.join(ft, "gpt.ckpt"))
+        pipe.init_vits_weights(os.path.join(ft, "sovits.pth"))
     else:
-        # 녹음만 있으면 베이스 모델 제로샷 클로닝
-        _load(MODEL_ID, "base")
-        prompt = get_clone_prompt(voice_name)
-        wavs, sr = model.generate_voice_clone(
-            text=text,
-            language="Korean",
-            voice_clone_prompt=prompt,
-        )
+        print("[서버] 사전학습 가중치(제로샷) 로드 중...", flush=True)
+        pipe.init_t2s_weights(DEFAULT_GPT)
+        pipe.init_vits_weights(DEFAULT_SOVITS)
+    current_voice = target
+
+
+def synthesize(text: str, voice_name: str, speed: float = 1.0) -> bytes:
+    import numpy as np
+    import soundfile as sf
+
+    with lock:
+        switch_voice(voice_name)
+        ref_audio, ref_text = get_reference(voice_name)
+        gen = pipe.run({
+            "text": text,
+            "text_lang": "ko",
+            "ref_audio_path": ref_audio,
+            "prompt_text": ref_text,
+            "prompt_lang": "ko",
+            "speed_factor": max(0.5, min(2.0, float(speed))),
+        })
+        sr, audio = next(gen)
+
     buf = io.BytesIO()
-    sf.write(buf, wavs[0], sr, format="WAV")
+    sf.write(buf, np.asarray(audio), sr, format="WAV")
     return buf.getvalue()
 
 
@@ -175,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
             voice = payload.get("voice") or (list_custom_voices() or [None])[0]
             if not voice:
                 raise ValueError("사용 가능한 커스텀 목소리가 없습니다")
-            audio = synthesize(text, voice)
+            audio = synthesize(text, voice, payload.get("speed", 1.0))
         except Exception as e:
             print(f"[서버] 합성 실패: {type(e).__name__}: {e}", flush=True)
             self._send_json({"error": str(e)}, 500)
@@ -186,7 +187,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(audio)
 
-    def log_message(self, fmt, *args):  # 기본 액세스 로그 대신 간단히
+    def log_message(self, fmt, *args):
         print(f"[서버] {self.command} {self.path}", flush=True)
 
 
@@ -194,9 +195,12 @@ def main() -> None:
     if sys.stdout:
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, OSError):
             pass
-    load_model()
+    if not os.path.isdir(SOVITS_REPO):
+        raise SystemExit("GPT-SoVITS 저장소가 없습니다. bat\\setup_tts_server.bat 을 먼저 실행해주세요.")
+    load_pipeline()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"[서버] http://{HOST}:{PORT} 에서 대기 중 (Ctrl+C 로 종료)", flush=True)
     try:

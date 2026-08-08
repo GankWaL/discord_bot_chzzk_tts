@@ -136,7 +136,10 @@ def custom_voices() -> dict[str, dict]:
                 voices[name] = {"engine": "custom", "id": name, "desc": "내 목소리"}
     if os.path.isdir(MY_VOICE_MODELS_DIR):
         for name in sorted(os.listdir(MY_VOICE_MODELS_DIR)):
-            if os.path.isfile(os.path.join(MY_VOICE_MODELS_DIR, name, "config.json")):
+            model_dir = os.path.join(MY_VOICE_MODELS_DIR, name)
+            if os.path.isfile(os.path.join(model_dir, "sovits.pth")) and os.path.isfile(
+                os.path.join(model_dir, "gpt.ckpt")
+            ):
                 voices[name] = {"engine": "custom", "id": name, "desc": "내 목소리 (학습됨)"}
     return voices
 
@@ -206,7 +209,7 @@ async def synthesize(
     speed = max(MIN_SPEED, min(MAX_SPEED, speed))
     voice = available_voices().get(voice_name) or EDGE_VOICES[DEFAULT_VOICE]
     if voice["engine"] == "custom":
-        return await _synthesize_custom(text, voice["id"])
+        return await _synthesize_custom(text, voice["id"], speed)
     if voice["engine"] == "typecast":
         return await _synthesize_typecast(text, voice["id"], speed, emotion)
     if voice["engine"] == "google":
@@ -245,16 +248,17 @@ async def _synthesize_edge(text: str, voice_id: str, speed: float) -> str:
     return path
 
 
-async def _synthesize_custom(text: str, voice_name: str) -> str:
-    """로컬 추론 서버(Qwen3-TTS)로 내 목소리 합성. 속도/감정은 아직 미지원."""
-    payload = {"text": text, "voice": voice_name}
+async def _synthesize_custom(text: str, voice_name: str, speed: float = DEFAULT_SPEED) -> str:
+    """로컬 추론 서버(GPT-SoVITS)로 내 목소리 합성. 감정은 미지원."""
+    payload = {"text": text, "voice": voice_name, "speed": speed}
     path = _make_temp(".wav")
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{CUSTOM_TTS_URL}/synthesize",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=120),
+                # 첫 요청은 모델 로드/교체(1~2분)가 포함될 수 있어 여유 있게
+                timeout=aiohttp.ClientTimeout(total=300),
             ) as resp:
                 if resp.status != 200:
                     detail = await resp.text()

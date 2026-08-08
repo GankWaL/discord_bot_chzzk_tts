@@ -12,6 +12,7 @@ my_voice/
 my_voice_models/
 my_voice_export/
 tts_env/
+GPT-SoVITS/
 server_test.log
 build/
 build_env/

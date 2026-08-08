@@ -123,36 +123,23 @@ GUI 설정 창에서 입력하는 값들입니다 (`.env` 직접 편집도 가�
 └── requirements.txt
 ```
 
-## 내 목소리 (커스텀 TTS) — v0.0.2
+## 내 목소리 (커스텀 TTS, GPT-SoVITS) — v0.0.2
 
-자기 목소리를 녹음해 그 목소리로 채팅을 읽게 할 수 있습니다 (Qwen3-TTS 제로샷 클로닝).
+자기 목소리를 녹음·학습해 그 목소리로 채팅을 읽게 할 수 있습니다 (GPT-SoVITS v2).
 
 1. **녹음**: GUI → [내 목소리 만들기] → 스크립트 30문장을 마이크로 녹음 (데이터셋: `my_voice\<이름>\`)
-2. **추론 환경 구성** (최초 1회, 수 GB 다운로드):
-   ```powershell
-   python -m venv tts_env
-   tts_env\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
-   tts_env\Scripts\python -m pip install qwen-tts
-   ```
-3. **서버 실행**: GUI → [커스텀 TTS 서버] 버튼 (또는 `bat\start_tts_server.bat`) — 모델 로딩까지 수십 초
-4. **사용**: 봇 전용 채널에서 `!목소리 <녹음한 이름>` — `!목소리목록` 에 "커스텀 TTS" 로 표시됩니다
+2. **학습 (Google Colab, 무료 / 로컬 GPU 불필요)**:
+   - 녹음 스튜디오에서 **[학습 패키지 내보내기 (Colab용)]** → `my_voice_export\` 에 zip + 노트북 생성
+   - [Google Colab](https://colab.research.google.com)에 노트북 업로드 → **런타임 → 모두 실행** → 안내에 따라 zip 업로드 (약 30~60분, 테스트 합성도 노트북에서 바로 청취 가능)
+   - 자동 다운로드되는 `<이름>_sovits_package.zip` 을 **[학습된 모델 가져오기]** 로 등록
+3. **추론 환경 구성** (최초 1회): `bat\setup_tts_server.bat` — venv 생성, CUDA torch, GPT-SoVITS 저장소, 사전학습 모델, Windows 호환 설정까지 자동
+4. **서버 실행**: GUI → [커스텀 TTS 서버] 버튼 (또는 `bat\start_tts_server.bat`)
+5. **사용**: 봇 전용 채널에서 `!목소리 <이름>` — `!목소리목록` 에 "내 목소리 (학습됨)" 으로 표시
 
-- 첫 합성 시 참조 음성으로 클로닝 프롬프트를 만들어 이후 재사용합니다 (첫 문장만 느림)
-- NVIDIA GPU(8GB VRAM 권장)에서 동작하며, GPU가 없으면 CPU로도 되지만 느립니다
-- 커스텀 목소리는 아직 속도/감정 조절이 적용되지 않습니다
-
-### 파인튜닝으로 품질 올리기 (Google Colab, 무료)
-
-제로샷보다 더 닮은 목소리를 원하면 Colab에서 파인튜닝할 수 있습니다 (로컬 GPU 불필요):
-
-1. 녹음 스튜디오에서 **[학습 패키지 내보내기 (Colab용)]** → `my_voice_export\` 에 zip + 노트북 생성
-2. [Google Colab](https://colab.research.google.com)에 노트북(.ipynb) 업로드 → **런타임 → 모두 실행** → 안내에 따라 zip 업로드 (약 20~40분)
-3. 학습 완료 후 자동 다운로드되는 `<이름>_model_package.zip` 을 **[학습된 모델 가져오기]** 로 등록
-4. 커스텀 TTS 서버 재시작 → 그 목소리는 이제 학습된 모델로 합성됨 (`!목소리목록` 에 "학습됨" 표시)
-
+- 합성 속도는 3070 Ti 기준 문장당 2~7초 (거의 실시간), `!속도` 배속 조절도 지원됩니다 (감정은 미지원)
+- 학습 없이 녹음만 있어도 제로샷(사전학습 가중치 + 참조 음성)으로 동작합니다 — 품질은 학습 모델이 더 좋습니다
 - 모델 패키지 zip 은 다른 사람에게 공유 가능 — 받은 사람도 [학습된 모델 가져오기] 로 등록하면 같은 목소리를 쓸 수 있습니다
-- 무료 Colab(T4)은 0.6B 모델 기준이며, Colab Pro(A100)라면 노트북 상단에서 1.7B 로 변경 가능합니다
-- 내보내기 시 **GPT-SoVITS v2 학습 노트북**(`_sovits.ipynb`)도 함께 생성됩니다 — 같은 zip 으로 학습해 Qwen3 와 품질을 비교해볼 수 있고, 테스트 합성을 노트북 안에서 바로 들어볼 수 있습니다 (현재 봇 연동은 Qwen3 모델만 지원)
+- NVIDIA GPU 권장 (없으면 CPU로도 되지만 느림)
 
 ## 빌드 (exe)
 

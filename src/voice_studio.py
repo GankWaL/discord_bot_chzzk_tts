@@ -331,14 +331,11 @@ class VoiceStudio(tk.Toplevel):
             "생성된 파일:\n"
             f"- {os.path.basename(zip_path)}\n"
             f"{notebooks}\n\n"
-            "노트북은 2종입니다 (같은 zip 사용):\n"
-            "- colab_train: Qwen3-TTS 파인튜닝\n"
-            "- colab_train_sovits: GPT-SoVITS 파인튜닝 (품질 비교용)\n\n"
             "사용 방법:\n"
             "1. https://colab.research.google.com 에서 노트북(.ipynb) 업로드\n"
             "2. 런타임 → 모두 실행 → 안내에 따라 zip 업로드\n"
             "3. 학습 완료 후 자동 다운로드되는 모델 zip 을\n"
-            "   [학습된 모델 가져오기] 로 등록 (Qwen3 모델만 해당)\n\n"
+            "   [학습된 모델 가져오기] 로 등록\n\n"
             "폴더를 열어드릴게요.",
             parent=self,
         )
