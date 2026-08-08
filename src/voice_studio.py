@@ -321,20 +321,24 @@ class VoiceStudio(tk.Toplevel):
     def export_package(self) -> None:
         name = self.name_var.get().strip() or "내목소리"
         try:
-            zip_path, notebook_path = train_export.build_train_package(name)
+            zip_path, notebook_paths = train_export.build_train_package(name)
         except (ValueError, OSError) as e:
             messagebox.showerror("학습 패키지", str(e), parent=self)
             return
+        notebooks = "\n".join(f"- {os.path.basename(p)}" for p in notebook_paths)
         messagebox.showinfo(
             "학습 패키지 내보내기 완료",
             "생성된 파일:\n"
             f"- {os.path.basename(zip_path)}\n"
-            f"- {os.path.basename(notebook_path)}\n\n"
+            f"{notebooks}\n\n"
+            "노트북은 2종입니다 (같은 zip 사용):\n"
+            "- colab_train: Qwen3-TTS 파인튜닝\n"
+            "- colab_train_sovits: GPT-SoVITS 파인튜닝 (품질 비교용)\n\n"
             "사용 방법:\n"
             "1. https://colab.research.google.com 에서 노트북(.ipynb) 업로드\n"
             "2. 런타임 → 모두 실행 → 안내에 따라 zip 업로드\n"
             "3. 학습 완료 후 자동 다운로드되는 모델 zip 을\n"
-            "   [학습된 모델 가져오기] 로 등록\n\n"
+            "   [학습된 모델 가져오기] 로 등록 (Qwen3 모델만 해당)\n\n"
             "폴더를 열어드릴게요.",
             parent=self,
         )
