@@ -22,39 +22,70 @@ import soundfile as sf
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MY_VOICE_DIR = os.path.join(BASE_DIR, "my_voice")
+MY_VOICE_MODELS_DIR = os.path.join(BASE_DIR, "my_voice_models")
 HOST = "127.0.0.1"
 PORT = 51770
 MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 
+# VRAM 한계로 모델은 한 번에 하나만 올린다.
+# loaded_kind: "base"(제로샷 클로닝용) 또는 파인튜닝된 목소리 이름
 model = None
+loaded_kind = None
 device = "cpu"
 clone_prompts: dict = {}  # 목소리 이름 -> 재사용 가능한 클로닝 프롬프트
 
 
+def finetuned_model_dir(voice_name: str) -> str | None:
+    path = os.path.join(MY_VOICE_MODELS_DIR, voice_name)
+    if os.path.isfile(os.path.join(path, "config.json")):
+        return path
+    return None
+
+
 def list_custom_voices() -> list:
-    voices = []
+    voices = set()
     if os.path.isdir(MY_VOICE_DIR):
-        for name in sorted(os.listdir(MY_VOICE_DIR)):
+        for name in os.listdir(MY_VOICE_DIR):
             meta = os.path.join(MY_VOICE_DIR, name, "metadata.csv")
             if os.path.isfile(meta) and os.path.getsize(meta) > 0:
-                voices.append(name)
-    return voices
+                voices.add(name)
+    if os.path.isdir(MY_VOICE_MODELS_DIR):
+        for name in os.listdir(MY_VOICE_MODELS_DIR):
+            if finetuned_model_dir(name):
+                voices.add(name)
+    return sorted(voices)
 
 
-def load_model() -> None:
-    global model, device
+def _load(model_path: str, kind: str) -> None:
+    """모델을 로드한다. 이미 다른 모델이 올라가 있으면 내리고 교체한다."""
+    global model, loaded_kind, device
     import torch
     from qwen_tts import Qwen3TTSModel
 
+    if loaded_kind == kind:
+        return
+    if model is not None:
+        print(f"[서버] '{loaded_kind}' 모델 해제 중...", flush=True)
+        del model
+        model = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-    print(f"[서버] 모델 로딩 중... ({MODEL_ID}, {device})", flush=True)
+    print(f"[서버] 모델 로딩 중... ({model_path}, {device})", flush=True)
     model = Qwen3TTSModel.from_pretrained(
-        MODEL_ID,
+        model_path,
         device_map=device,
         dtype=dtype,
     )
+    loaded_kind = kind
+    clone_prompts.clear()  # 이전 모델로 만든 프롬프트는 무효
     print("[서버] 모델 로딩 완료", flush=True)
+
+
+def load_model() -> None:
+    _load(MODEL_ID, "base")
 
 
 def get_reference(voice_name: str) -> tuple:
@@ -92,12 +123,25 @@ def get_clone_prompt(voice_name: str):
 
 
 def synthesize(text: str, voice_name: str) -> bytes:
-    prompt = get_clone_prompt(voice_name)
-    wavs, sr = model.generate_voice_clone(
-        text=text,
-        language="Korean",
-        voice_clone_prompt=prompt,
-    )
+    ft_dir = finetuned_model_dir(voice_name)
+    if ft_dir:
+        # 파인튜닝된 모델이 있으면 그 모델로 합성 (필요 시 모델 교체)
+        _load(ft_dir, voice_name)
+        speaker = voice_name
+        meta_path = os.path.join(ft_dir, "meta.json")
+        if os.path.isfile(meta_path):
+            with open(meta_path, encoding="utf-8") as f:
+                speaker = json.load(f).get("speaker", voice_name)
+        wavs, sr = model.generate_custom_voice(text=text, speaker=speaker)
+    else:
+        # 녹음만 있으면 베이스 모델 제로샷 클로닝
+        _load(MODEL_ID, "base")
+        prompt = get_clone_prompt(voice_name)
+        wavs, sr = model.generate_voice_clone(
+            text=text,
+            language="Korean",
+            voice_clone_prompt=prompt,
+        )
     buf = io.BytesIO()
     sf.write(buf, wavs[0], sr, format="WAV")
     return buf.getvalue()

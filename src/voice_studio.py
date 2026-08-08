@@ -7,13 +7,16 @@ PC 마이크로 스크립트 문장을 녹음해 TTS 학습용 데이터셋을 �
 """
 
 import os
+import subprocess
 import threading
 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
+
+import train_export
 
 SAMPLE_RATE = 48000  # 학습 시 모델에 맞춰 리샘플링하므로 원본은 고품질로 저장
 
@@ -140,6 +143,16 @@ class VoiceStudio(tk.Toplevel):
         self.listbox = tk.Listbox(frame, height=8, font=("맑은 고딕", 9))
         self.listbox.pack(fill="both", expand=True, pady=(6, 0))
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
+
+        # 학습(Phase 3) 버튼들
+        train_frame = ttk.Frame(frame)
+        train_frame.pack(fill="x", pady=(8, 0))
+        ttk.Button(
+            train_frame, text="학습 패키지 내보내기 (Colab용)", command=self.export_package
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            train_frame, text="학습된 모델 가져오기", command=self.import_model
+        ).pack(side="left", padx=2)
 
         self._reload_dataset()
 
@@ -302,6 +315,51 @@ class VoiceStudio(tk.Toplevel):
                 pass
 
         threading.Thread(target=_play, daemon=True).start()
+
+    # ---------- 학습 패키지 / 모델 ----------
+
+    def export_package(self) -> None:
+        name = self.name_var.get().strip() or "내목소리"
+        try:
+            zip_path, notebook_path = train_export.build_train_package(name)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("학습 패키지", str(e), parent=self)
+            return
+        messagebox.showinfo(
+            "학습 패키지 내보내기 완료",
+            "생성된 파일:\n"
+            f"- {os.path.basename(zip_path)}\n"
+            f"- {os.path.basename(notebook_path)}\n\n"
+            "사용 방법:\n"
+            "1. https://colab.research.google.com 에서 노트북(.ipynb) 업로드\n"
+            "2. 런타임 → 모두 실행 → 안내에 따라 zip 업로드\n"
+            "3. 학습 완료 후 자동 다운로드되는 모델 zip 을\n"
+            "   [학습된 모델 가져오기] 로 등록\n\n"
+            "폴더를 열어드릴게요.",
+            parent=self,
+        )
+        subprocess.Popen(["explorer", os.path.dirname(zip_path)])
+
+    def import_model(self) -> None:
+        zip_path = filedialog.askopenfilename(
+            parent=self,
+            title="Colab에서 받은 모델 패키지 zip 선택",
+            filetypes=[("모델 패키지", "*.zip")],
+        )
+        if not zip_path:
+            return
+        try:
+            voice_name = train_export.import_model_package(zip_path)
+        except Exception as e:
+            messagebox.showerror("모델 가져오기", f"가져오기 실패: {e}", parent=self)
+            return
+        messagebox.showinfo(
+            "모델 가져오기 완료",
+            f"'{voice_name}' 학습 모델을 설치했어요.\n\n"
+            "커스텀 TTS 서버를 재시작하면 이 목소리가 학습된 모델로 합성됩니다.\n"
+            f"디스코드에서: !목소리 {voice_name}",
+            parent=self,
+        )
 
     def _on_close(self) -> None:
         if self.recording:

@@ -123,14 +123,21 @@ def _google_key() -> str | None:
     return os.getenv("GOOGLE_TTS_API_KEY")
 
 
+MY_VOICE_MODELS_DIR = os.path.join(_ROOT_DIR, "my_voice_models")
+
+
 def custom_voices() -> dict[str, dict]:
-    """my_voice/ 에 녹음 데이터가 있는 커스텀(내 목소리) 목록."""
+    """커스텀(내 목소리) 목록 — 녹음 데이터(제로샷) + 학습된 모델(파인튜닝)."""
     voices = {}
     if os.path.isdir(MY_VOICE_DIR):
         for name in sorted(os.listdir(MY_VOICE_DIR)):
             meta = os.path.join(MY_VOICE_DIR, name, "metadata.csv")
             if os.path.isfile(meta) and os.path.getsize(meta) > 0:
                 voices[name] = {"engine": "custom", "id": name, "desc": "내 목소리"}
+    if os.path.isdir(MY_VOICE_MODELS_DIR):
+        for name in sorted(os.listdir(MY_VOICE_MODELS_DIR)):
+            if os.path.isfile(os.path.join(MY_VOICE_MODELS_DIR, name, "config.json")):
+                voices[name] = {"engine": "custom", "id": name, "desc": "내 목소리 (학습됨)"}
     return voices
 
 

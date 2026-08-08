@@ -9,6 +9,8 @@ google_tts_usage.json
 shutdown.flag
 user_settings.json
 my_voice/
+my_voice_models/
+my_voice_export/
 tts_env/
 server_test.log
 build/
