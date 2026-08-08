@@ -123,6 +123,24 @@ GUI 설정 창에서 입력하는 값들입니다 (`.env` 직접 편집도 가�
 └── requirements.txt
 ```
 
+## 내 목소리 (커스텀 TTS) — v0.0.2
+
+자기 목소리를 녹음해 그 목소리로 채팅을 읽게 할 수 있습니다 (Qwen3-TTS 제로샷 클로닝).
+
+1. **녹음**: GUI → [내 목소리 만들기] → 스크립트 30문장을 마이크로 녹음 (데이터셋: `my_voice\<이름>\`)
+2. **추론 환경 구성** (최초 1회, 수 GB 다운로드):
+   ```powershell
+   python -m venv tts_env
+   tts_env\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+   tts_env\Scripts\python -m pip install qwen-tts
+   ```
+3. **서버 실행**: GUI → [커스텀 TTS 서버] 버튼 (또는 `bat\start_tts_server.bat`) — 모델 로딩까지 수십 초
+4. **사용**: 봇 전용 채널에서 `!목소리 <녹음한 이름>` — `!목소리목록` 에 "커스텀 TTS" 로 표시됩니다
+
+- 첫 합성 시 참조 음성으로 클로닝 프롬프트를 만들어 이후 재사용합니다 (첫 문장만 느림)
+- NVIDIA GPU(8GB VRAM 권장)에서 실시간 수준으로 동작하며, GPU가 없으면 CPU로도 되지만 느립니다
+- 커스텀 목소리는 아직 속도/감정 조절이 적용되지 않습니다
+
 ## 빌드 (exe)
 
 ```powershell

@@ -9,6 +9,8 @@ google_tts_usage.json
 shutdown.flag
 user_settings.json
 my_voice/
+tts_env/
+server_test.log
 build/
 build_env/
 dist/

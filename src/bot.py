@@ -412,6 +412,7 @@ async def list_voices(ctx: commands.Context):
         "edge": "Edge TTS (무료)",
         "typecast": "Typecast (크레딧 소모)",
         "google": "Google Neural2 (월 무료 한도 내)",
+        "custom": "커스텀 TTS (로컬 서버 필요)",
     }
     lines = []
     for name, voice in tts.available_voices().items():

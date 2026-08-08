@@ -32,6 +32,16 @@ TYPECAST_URL = "https://api.typecast.ai/v1/text-to-speech"
 TYPECAST_SUBSCRIPTION_URL = "https://api.typecast.ai/v1/users/me/subscription"
 TYPECAST_MODEL = "ssfm-v30"
 
+# 커스텀 TTS(내 목소리) 추론 서버 — bat\start_tts_server.bat 로 실행
+CUSTOM_TTS_URL = "http://127.0.0.1:51770"
+# my_voice 는 레포 루트에 있다 (exe 는 dist\ 안이므로 한 단계 위)
+_ROOT_DIR = (
+    os.path.dirname(BASE_DIR)
+    if getattr(sys, "frozen", False) and os.path.basename(BASE_DIR).lower() == "dist"
+    else BASE_DIR
+)
+MY_VOICE_DIR = os.path.join(_ROOT_DIR, "my_voice")
+
 GOOGLE_TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 # Neural2 월 무료 한도(100만 자) — 과금 방지를 위해 95%에서 차단
 GOOGLE_FREE_LIMIT = 1_000_000
@@ -113,6 +123,17 @@ def _google_key() -> str | None:
     return os.getenv("GOOGLE_TTS_API_KEY")
 
 
+def custom_voices() -> dict[str, dict]:
+    """my_voice/ 에 녹음 데이터가 있는 커스텀(내 목소리) 목록."""
+    voices = {}
+    if os.path.isdir(MY_VOICE_DIR):
+        for name in sorted(os.listdir(MY_VOICE_DIR)):
+            meta = os.path.join(MY_VOICE_DIR, name, "metadata.csv")
+            if os.path.isfile(meta) and os.path.getsize(meta) > 0:
+                voices[name] = {"engine": "custom", "id": name, "desc": "내 목소리"}
+    return voices
+
+
 def available_voices() -> dict[str, dict]:
     """현재 사용 가능한 음성 목록. Typecast/Google은 API 키가 있을 때만 포함된다."""
     voices = dict(EDGE_VOICES)
@@ -120,6 +141,7 @@ def available_voices() -> dict[str, dict]:
         voices.update(TYPECAST_VOICES)
     if _google_key():
         voices.update(GOOGLE_VOICES)
+    voices.update(custom_voices())
     return voices
 
 
@@ -176,6 +198,8 @@ async def synthesize(
     """
     speed = max(MIN_SPEED, min(MAX_SPEED, speed))
     voice = available_voices().get(voice_name) or EDGE_VOICES[DEFAULT_VOICE]
+    if voice["engine"] == "custom":
+        return await _synthesize_custom(text, voice["id"])
     if voice["engine"] == "typecast":
         return await _synthesize_typecast(text, voice["id"], speed, emotion)
     if voice["engine"] == "google":
@@ -208,6 +232,34 @@ async def _synthesize_edge(text: str, voice_id: str, speed: float) -> str:
     path = _make_temp(".mp3")
     try:
         await edge_tts.Communicate(text, voice_id, rate=rate).save(path)
+    except Exception:
+        _cleanup(path)
+        raise
+    return path
+
+
+async def _synthesize_custom(text: str, voice_name: str) -> str:
+    """로컬 추론 서버(Qwen3-TTS)로 내 목소리 합성. 속도/감정은 아직 미지원."""
+    payload = {"text": text, "voice": voice_name}
+    path = _make_temp(".wav")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{CUSTOM_TTS_URL}/synthesize",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status != 200:
+                    detail = await resp.text()
+                    raise RuntimeError(f"커스텀 TTS 서버 오류: {detail[:200]}")
+                data = await resp.read()
+        with open(path, "wb") as f:
+            f.write(data)
+    except aiohttp.ClientConnectorError:
+        _cleanup(path)
+        raise RuntimeError(
+            "커스텀 TTS 서버가 실행되어 있지 않습니다. bat\\start_tts_server.bat 을 먼저 실행해주세요."
+        )
     except Exception:
         _cleanup(path)
         raise

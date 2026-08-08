@@ -286,6 +286,9 @@ class BotGui:
         self.voice_btn = ttk.Button(tools, text="내 목소리 만들기", command=self.open_voice_studio)
         self.voice_btn.pack(side="left", padx=2)
 
+        self.tts_server_btn = ttk.Button(tools, text="커스텀 TTS 서버", command=self.start_tts_server)
+        self.tts_server_btn.pack(side="left", padx=2)
+
         self.update_btn = ttk.Button(tools, text="업데이트 확인", command=self.check_update)
         self.update_btn.pack(side="right", padx=2)
 
@@ -429,6 +432,28 @@ class BotGui:
             )
             return
         voice_studio.VoiceStudio(self.root, REPO_DIR)
+
+    def start_tts_server(self) -> None:
+        """커스텀 TTS 추론 서버를 새 콘솔 창으로 띄운다 (이미 떠 있으면 안내)."""
+        try:
+            with socket.create_connection(("127.0.0.1", 51770), timeout=1):
+                messagebox.showinfo("커스텀 TTS 서버", "서버가 이미 실행 중입니다.")
+                return
+        except OSError:
+            pass
+        server_py = os.path.join(REPO_DIR, "tts_env", "Scripts", "python.exe")
+        if not os.path.exists(server_py):
+            messagebox.showinfo(
+                "커스텀 TTS 서버",
+                "tts_env 환경이 없습니다. README의 '내 목소리' 섹션을 참고해 구성해주세요.",
+            )
+            return
+        subprocess.Popen(
+            [server_py, os.path.join(REPO_DIR, "src", "custom_tts_server.py")],
+            cwd=REPO_DIR,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        self.log("[TTS 서버] 새 콘솔 창에서 시작했습니다. 모델 로딩까지 수십 초 걸릴 수 있어요.")
 
     # ---------- 설정 (.env) ----------
 
