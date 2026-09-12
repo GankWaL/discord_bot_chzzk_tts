@@ -163,11 +163,11 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1
 - `.venv` 에 빌드 전용 환경(uv 가 관리하는 Python 3.11)을 만들고 → PyInstaller 로 `tts_bot_gui.exe` + `tts_bot.exe` 폴더(`build\pyinstaller\DiscordTTSBot`) → Inno Setup 으로 `build\release\DiscordTTSBot-Setup-<버전>.exe` 를 만듭니다.
 - 버전은 `src\app_version.py` 의 `VERSION` 하나로 관리합니다 (설치 파일 버전, 릴리스 태그, 업데이트 확인 기준).
 
-**릴리스 배포**: `VERSION` 을 올려 커밋·푸시한 뒤 같은 이름의 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 설치 파일을 빌드해 릴리스에 올립니다.
+**릴리스 배포**: `VERSION` 을 올려 커밋·푸시한 뒤 `release-<버전>` 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 설치 파일을 빌드해 릴리스(제목 `v<버전>`)에 올립니다. 태그가 브랜치 이름(`v0.0.x`)과 겹치지 않도록 `v` 로 시작하지 않습니다.
 
-```powershell
-git tag v0.0.3
-git push origin v0.0.3
+```bash
+git tag -a release-0.0.3 -m "v0.0.3"
+git push origin release-0.0.3
 ```
 
 ### 저장소 안 exe (소스 실행용)

@@ -798,8 +798,9 @@ class BotGui:
             if release is None:
                 self.log("[업데이트] 아직 배포된 릴리스가 없습니다.")
                 return
-            latest = release.get("tag_name", "")
-            if parse_version(latest) <= parse_version(APP_VERSION):
+            tag = release.get("tag_name", "")
+            latest = release.get("name") or tag  # 릴리스 제목(v0.0.3)을 보여 준다
+            if parse_version(tag) <= parse_version(APP_VERSION):
                 self.log(f"[업데이트] 이미 최신 버전입니다 (v{APP_VERSION}).")
                 self.root.after(0, lambda: messagebox.showinfo("업데이트", "이미 최신 버전입니다."))
                 return
