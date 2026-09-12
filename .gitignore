@@ -20,3 +20,4 @@ build/
 build_env/
 dist/
 *.spec
+!installer/*.spec

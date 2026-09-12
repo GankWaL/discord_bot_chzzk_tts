@@ -28,6 +28,8 @@ def download_pretrained() -> None:
             "chinese-hubert-base/*",
             "chinese-roberta-wwm-ext-large/*",
         ],
+        # s2D 는 학습(판별자)에만 쓰이고 추론에는 불필요 — 89MB 절약
+        ignore_patterns=["gsv-v2final-pretrained/s2D*.pth"],
     )
     print("[설정] 사전학습 모델 준비 완료")
 
@@ -46,6 +48,7 @@ def convert_safetensors() -> None:
         sd = torch.load(src, map_location="cpu", weights_only=True)
         sd = {k: v.clone().contiguous() for k, v in sd.items()}
         save_file(sd, dst, metadata={"format": "pt"})
+        os.remove(src)  # 변환 후 원본 .bin 은 불필요 (중복 용량)
     print("[설정] safetensors 변환 완료")
 
 

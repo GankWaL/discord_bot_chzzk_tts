@@ -2,8 +2,9 @@
 
 - 봇 실행 / 종료 / 재시작 버튼, bot.log 실시간 확인
 - [설정] 서브 창에서 토큰·API 키 입력 → .env 자동 생성
-- [환경 설치] 버튼으로 requirements.txt 라이브러리 일괄 설치
-- [exe 재빌드] 버튼으로 패치 후 exe 재빌드 (빌드 환경 자동 구성)
+- [환경 설치] 버튼으로 requirements.txt 라이브러리 일괄 설치 (저장소 실행 시에만)
+- [exe 재빌드] 버튼으로 패치 후 exe 재빌드 (빌드 환경 자동 구성, 저장소 실행 시에만)
+- [업데이트 확인]: 설치 마법사로 설치한 exe 는 GitHub 릴리스로, 저장소 실행은 git pull 로 업데이트
 - 창을 닫으면 트레이로 최소화, 트레이 우클릭 메뉴로 제어
 - `--autostart` 옵션으로 실행하면 GUI가 뜨면서 봇도 자동 실행 (시작 프로그램용)
 
@@ -11,15 +12,20 @@
     python src\\bot_gui.py
 """
 
+import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
+import urllib.error
+import urllib.request
 from tkinter import messagebox, ttk
 
 try:
@@ -30,6 +36,8 @@ try:
 except ImportError:  # 최초 설치 전에는 트레이 없이 동작
     pystray = None
     HAS_TRAY = False
+
+from app_version import VERSION as APP_VERSION
 
 # 프로젝트 루트: exe(PyInstaller)면 실행 파일 위치, 아니면 src/ 의 상위 폴더
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -43,6 +51,10 @@ if FROZEN and os.path.basename(BASE_DIR).lower() == "dist":
     REPO_DIR = os.path.dirname(BASE_DIR)
 else:
     REPO_DIR = BASE_DIR
+
+# 설치 마법사로 설치한 exe (저장소 밖) — 업데이트를 git 대신 GitHub 릴리스로 받는다
+INSTALLED = FROZEN and not os.path.isdir(os.path.join(REPO_DIR, ".git"))
+LATEST_RELEASE_API = "https://api.github.com/repos/GankWaL/discord_bot_chzzk_tts/releases/latest"
 
 BOT_SCRIPT = os.path.join(REPO_DIR, "src", "bot.py")
 BOT_EXE = os.path.join(BASE_DIR, "tts_bot.exe")
@@ -224,6 +236,26 @@ def system_python() -> str | None:
     return shutil.which("python")
 
 
+def parse_version(text: str) -> tuple:
+    """'v0.1.2' / '0.1.2' → (0, 1, 2)"""
+    return tuple(int(n) for n in re.findall(r"\d+", text))
+
+
+def fetch_latest_release() -> dict | None:
+    """GitHub 최신 릴리스 정보. 릴리스가 없으면 None, 네트워크 오류는 예외로 올린다."""
+    req = urllib.request.Request(
+        LATEST_RELEASE_API,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "discord-tts-bot"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
 def make_tray_image():
     if os.path.exists(ICON_PNG):
         return Image.open(ICON_PNG)
@@ -331,9 +363,10 @@ class BotGui:
         self.env_btn = ttk.Button(tools, text="설정 (토큰/API 키)", command=self.open_settings)
         self.env_btn.pack(side="left", padx=2)
         self.install_btn = ttk.Button(tools, text="환경 설치 (라이브러리)", command=self.install_deps)
-        self.install_btn.pack(side="left", padx=2)
         self.build_btn = ttk.Button(tools, text="exe 재빌드", command=self.rebuild)
-        self.build_btn.pack(side="left", padx=2)
+        if not INSTALLED:  # 설치본은 라이브러리가 exe 에 들어 있고 빌드할 소스도 없다
+            self.install_btn.pack(side="left", padx=2)
+            self.build_btn.pack(side="left", padx=2)
 
         self.voice_btn = ttk.Button(tools, text="내 목소리 만들기", command=self.open_voice_studio)
         self.voice_btn.pack(side="left", padx=2)
@@ -344,11 +377,11 @@ class BotGui:
         self.update_btn = ttk.Button(tools, text="업데이트 확인", command=self.check_update)
         self.update_btn.pack(side="right", padx=2)
 
-        mode = "exe" if FROZEN else "소스"
+        mode = "설치본" if INSTALLED else ("exe" if FROZEN else "소스")
         tray_note = "" if HAS_TRAY else " · 트레이 비활성(환경 설치 필요)"
         ttk.Label(
             tools,
-            text=f"실행 모드: {mode}{tray_note}",
+            text=f"v{APP_VERSION} · 실행 모드: {mode}{tray_note}",
             foreground="#888888",
             font=("맑은 고딕", 8),
         ).pack(side="right", padx=(0, 8))
@@ -512,10 +545,12 @@ class BotGui:
             messagebox.showinfo("커스텀 TTS 서버", "서버가 이미 실행 중입니다.")
             return
         if not tts_env_ready():
-            messagebox.showinfo(
+            if messagebox.askyesno(
                 "커스텀 TTS 서버",
-                "추론 환경이 없습니다. bat\\setup_tts_server.bat 을 먼저 실행해주세요.",
-            )
+                "추론 환경이 없습니다. 지금 구성할까요?\n"
+                "(bat\\setup_tts_server.bat 실행 — Python·git 필요, 수 GB 다운로드)",
+            ):
+                os.startfile(os.path.join(REPO_DIR, "bat", "setup_tts_server.bat"))
             return
         self._auto_start_tts_server()
 
@@ -671,12 +706,16 @@ class BotGui:
     def check_update(self) -> None:
         if self.busy:
             return
-        if not shutil.which("git"):
-            messagebox.showerror("업데이트", "git 이 설치되어 있지 않아 업데이트를 확인할 수 없습니다.")
-            return
+        if INSTALLED:
+            target = self._do_check_release
+        else:
+            if not shutil.which("git"):
+                messagebox.showerror("업데이트", "git 이 설치되어 있지 않아 업데이트를 확인할 수 없습니다.")
+                return
+            target = self._do_check_update
         self.busy = True
         self._set_all_buttons(False)
-        threading.Thread(target=self._do_check_update, daemon=True).start()
+        threading.Thread(target=target, daemon=True).start()
 
     def _git(self, *args: str) -> tuple:
         try:
@@ -742,6 +781,75 @@ class BotGui:
         # 업데이트 성공 시 이어서 재빌드 (busy 상태 유지한 채 진행)
         self.log("[업데이트] 업데이트 완료. exe 재빌드를 시작합니다...")
         self._do_rebuild()
+
+    def _do_check_release(self) -> None:
+        """설치본 업데이트: 최신 릴리스의 설치 파일을 받아 조용히 재설치한다.
+
+        설치 파일이 끝나면 컨트롤 패널을 --autostart 로 다시 띄워 봇도 이어서 켜진다.
+        """
+        installing = False
+        try:
+            self.log("[업데이트] 깃허브 릴리스를 확인하는 중...")
+            try:
+                release = fetch_latest_release()
+            except (OSError, ValueError) as e:
+                self.log(f"[업데이트] 확인 실패: {e}")
+                return
+            if release is None:
+                self.log("[업데이트] 아직 배포된 릴리스가 없습니다.")
+                return
+            latest = release.get("tag_name", "")
+            if parse_version(latest) <= parse_version(APP_VERSION):
+                self.log(f"[업데이트] 이미 최신 버전입니다 (v{APP_VERSION}).")
+                self.root.after(0, lambda: messagebox.showinfo("업데이트", "이미 최신 버전입니다."))
+                return
+            asset = next(
+                (a for a in release.get("assets", []) if a.get("name", "").lower().endswith(".exe")),
+                None,
+            )
+            if asset is None:
+                self.log(f"[업데이트] {latest} 릴리스에 설치 파일이 없습니다.")
+                return
+            notes = (release.get("body") or "").strip()
+            if len(notes) > 600:
+                notes = notes[:600] + " ..."
+            if not self._ask_on_main(
+                "업데이트",
+                f"새 버전 {latest} 이 있습니다 (현재 v{APP_VERSION}).\n\n{notes}\n\n"
+                "지금 설치할까요? 봇이 잠시 종료되고, 설치가 끝나면 자동으로 다시 시작됩니다.",
+            ):
+                self.log("[업데이트] 사용자가 업데이트를 취소했습니다.")
+                return
+
+            setup = os.path.join(tempfile.gettempdir(), asset["name"])
+            self.log(f"[업데이트] 설치 파일 다운로드 중... ({asset.get('size', 0) / 1e6:.0f} MB)")
+            try:
+                urllib.request.urlretrieve(asset["browser_download_url"], setup)
+            except OSError as e:
+                self.log(f"[업데이트] 다운로드 실패: {e}")
+                return
+            self._stop_bot()
+            self.log("[업데이트] 설치를 시작합니다. 끝나면 컨트롤 패널이 다시 열립니다.")
+            subprocess.Popen([setup, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+            installing = True
+            self._exit_for_update()
+        finally:
+            if not installing:
+                self.busy = False
+                self.root.after(0, lambda: self._set_all_buttons(True))
+                self._refresh_status()
+
+    def _exit_for_update(self) -> None:
+        """설치 파일이 exe 를 덮어쓰고 새 컨트롤 패널이 단일 인스턴스 잠금을 얻을 수 있게 종료한다."""
+        if self.lock_sock:
+            try:
+                self.lock_sock.close()
+            except OSError:
+                pass
+            self.lock_sock = None
+        if self.tray:
+            self.tray.stop()
+        self.root.after(0, self.root.destroy)
 
     # ---------- 트레이 ----------
 

@@ -2,6 +2,14 @@
 rem One-time setup for the custom TTS (GPT-SoVITS) inference server.
 cd /d "%~dp0.."
 
+rem python creates tts_env, git clones GPT-SoVITS (only needed on the first run)
+if not exist tts_env\Scripts\python.exe (
+    where python >nul 2>nul || (echo Python 3.10+ is required: winget install Python.Python.3.11& pause& exit /b 1)
+)
+if not exist GPT-SoVITS (
+    where git >nul 2>nul || (echo Git is required: winget install Git.Git& pause& exit /b 1)
+)
+
 echo [1/5] python venv (tts_env)...
 if not exist tts_env\Scripts\python.exe python -m venv tts_env
 
